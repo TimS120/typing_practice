@@ -9,21 +9,26 @@ are stored in a statistics file and can be visualized.
 
 from __future__ import annotations
 
+import random
 import time
 from pathlib import Path
-import random
 from typing import List
 
 import matplotlib.pyplot as plt
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import ttk, messagebox
 
 
 TEXT_FILE_NAME = "typing_texts.txt"
 STATS_FILE_NAME = "typing_stats.csv"
+DEFAULT_FONT_FAMILY = "Courier New"
+DEFAULT_FONT_SIZE = 12
+MIN_FONT_SIZE = 6
+MAX_FONT_SIZE = 48
 
 
-def get__file_path(file_path) -> Path:
+def get__file_path(file_path: str) -> Path:
     """
     Return the path of the given file.
 
@@ -133,6 +138,9 @@ class TypingTrainerApp:
         self.finished: bool = False
         self.stats_file_path: Path = get__file_path(STATS_FILE_NAME)
 
+        self.current_font_size: int = DEFAULT_FONT_SIZE
+        self.text_font: tkfont.Font | None = None
+
         self._build_gui()
 
     def _build_gui(self) -> None:
@@ -141,7 +149,7 @@ class TypingTrainerApp:
         """
         self.master.title("Typing Trainer")
 
-        self.master.geometry("900x500")
+        self.master.geometry("900x550")
 
         self.master.columnconfigure(0, weight=1)
         self.master.rowconfigure(0, weight=1)
@@ -153,7 +161,7 @@ class TypingTrainerApp:
         main_frame.rowconfigure(1, weight=1)
 
         list_frame = ttk.Frame(main_frame)
-        list_frame.grid(row=0, column=0, rowspan=2, sticky="ns", padx=(0, 10))
+        list_frame.grid(row=0, column=0, rowspan=3, sticky="ns", padx=(0, 10))
 
         ttk.Label(list_frame, text="Available texts").grid(
             row=0,
@@ -201,20 +209,52 @@ class TypingTrainerApp:
         right_frame.columnconfigure(0, weight=1)
         right_frame.rowconfigure(2, weight=1)
 
-        self.wpm_label = ttk.Label(right_frame, text="WPM: 0.0")
-        self.wpm_label.grid(row=0, column=0, sticky="e")
+        top_right_frame = ttk.Frame(right_frame)
+        top_right_frame.grid(row=0, column=0, sticky="ew")
+        top_right_frame.columnconfigure(0, weight=1)
+        top_right_frame.columnconfigure(1, weight=0)
+        top_right_frame.columnconfigure(2, weight=0)
+        top_right_frame.columnconfigure(3, weight=0)
 
         self.info_label = ttk.Label(
-            right_frame,
-            text="Select a text on the left and click Load.",
+            top_right_frame,
+            text="Select a text on the left and click Load."
         )
-        self.info_label.grid(row=1, column=0, sticky="w", pady=(0, 5))
+        self.info_label.grid(row=0, column=0, sticky="w", pady=(0, 5))
+
+        # Font size control buttons
+        font_smaller_button = ttk.Button(
+            top_right_frame,
+            text="A-",
+            width=3,
+            command=self.decrease_font_size
+        )
+        font_smaller_button.grid(row=0, column=1, padx=(5, 2), sticky="e")
+
+        font_reset_button = ttk.Button(
+            top_right_frame,
+            text="A0",
+            width=3,
+            command=self.reset_font_size
+        )
+        font_reset_button.grid(row=0, column=2, padx=2, sticky="e")
+
+        font_bigger_button = ttk.Button(
+            top_right_frame,
+            text="A+",
+            width=3,
+            command=self.increase_font_size
+        )
+        font_bigger_button.grid(row=0, column=3, padx=(2, 0), sticky="e")
+
+        self.wpm_label = ttk.Label(right_frame, text="WPM: 0.0")
+        self.wpm_label.grid(row=1, column=0, sticky="e")
 
         self.display_text = tk.Text(
             right_frame,
             height=6,
             wrap="word",
-            state="disabled",
+            state="disabled"
         )
         self.display_text.grid(row=2, column=0, sticky="nsew")
 
@@ -226,26 +266,17 @@ class TypingTrainerApp:
         self.input_text = tk.Text(
             input_frame,
             height=8,
-            wrap="word",
+            wrap="word"
         )
         self.input_text.grid(row=0, column=0, sticky="nsew")
 
-        # Tag for highlighting incorrect characters.
-        self.input_text = tk.Text(
-            input_frame,
-            height=8,
-            wrap="word",
-        )
-        self.input_text.grid(row=0, column=0, sticky="nsew")
-
-        # Tag for highlighting incorrect characters (also spaces).
+        # Tag for highlighting incorrect characters (also spaces)
         self.input_text.tag_configure(
             "error",
             foreground="red",
-            background="#ffcccc",  # light red rectangle behind wrong chars, including spaces
+            background="#ffcccc"
         )
 
-        self.input_text.bind("<Key>", self.on_key_press)
         self.input_text.bind("<Key>", self.on_key_press)
 
         control_frame = ttk.Frame(right_frame)
@@ -258,23 +289,63 @@ class TypingTrainerApp:
         reset_button = ttk.Button(
             control_frame,
             text="Reset session",
-            command=self.reset_session,
+            command=self.reset_session
         )
         reset_button.grid(row=0, column=0, padx=(0, 5))
 
         show_stats_button = ttk.Button(
             control_frame,
             text="Show result",
-            command=self.show_result,
+            command=self.show_result
         )
         show_stats_button.grid(row=0, column=1, padx=(5, 5))
 
         histogram_button = ttk.Button(
             control_frame,
             text="Show WPM histogram",
-            command=self.show_histogram,
+            command=self.show_histogram
         )
         histogram_button.grid(row=0, column=2, padx=(5, 0))
+
+        # Initialize shared font for both text widgets
+        self.text_font = tkfont.Font(
+            family=DEFAULT_FONT_FAMILY,
+            size=self.current_font_size
+        )
+        self.display_text.configure(font=self.text_font)
+        self.input_text.configure(font=self.text_font)
+
+    def increase_font_size(self) -> None:
+        """
+        Increase the font size of the text widgets by one step.
+        """
+        if self.current_font_size >= MAX_FONT_SIZE:
+            return
+        self.current_font_size += 2
+        self._apply_font_size()
+
+    def decrease_font_size(self) -> None:
+        """
+        Decrease the font size of the text widgets by one step.
+        """
+        if self.current_font_size <= MIN_FONT_SIZE:
+            return
+        self.current_font_size -= 2
+        self._apply_font_size()
+
+    def reset_font_size(self) -> None:
+        """
+        Reset the font size of the text widgets to the default value.
+        """
+        self.current_font_size = DEFAULT_FONT_SIZE
+        self._apply_font_size()
+
+    def _apply_font_size(self) -> None:
+        """
+        Apply the currently configured font size to both text widgets.
+        """
+        if self.text_font is not None:
+            self.text_font.configure(size=self.current_font_size)
 
     def on_load_selected(self) -> None:
         """
@@ -284,7 +355,7 @@ class TypingTrainerApp:
         if not selection:
             messagebox.showinfo(
                 "Selection",
-                "Please select a text in the list.",
+                "Please select a text in the list."
             )
             return
 
@@ -306,7 +377,10 @@ class TypingTrainerApp:
         """
         Display the selected text and reset the typing session.
         """
-        normalized_lines = [line.rstrip() for line in self.selected_text.splitlines()]  # Removing of trailing spaces on each line
+        normalized_lines = [
+            line.rstrip()
+            for line in self.selected_text.splitlines()
+        ]
         self.target_text = "\n".join(normalized_lines)
 
         self.display_text.configure(state="normal")
@@ -355,11 +429,11 @@ class TypingTrainerApp:
         """
         if self.target_text == "":
             self.info_label.configure(
-                text="Please select and load a text before typing.",
+                text="Please select and load a text before typing."
             )
             return
 
-        if self.finished:  # After finishing, WPM is frozen and further typing is ignored for statistics.
+        if self.finished:
             return
 
         if self.start_time is None:
@@ -515,7 +589,7 @@ class TypingTrainerApp:
             messagebox.showinfo(
                 "Statistics",
                 "No statistics file found yet. "
-                "Finish at least one session.",
+                "Finish at least one session."
             )
             return
 
