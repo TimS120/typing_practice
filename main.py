@@ -15,6 +15,9 @@ from pathlib import Path
 from typing import List
 
 import matplotlib.pyplot as plt
+import numpy as np
+from mpl_toolkits.mplot3d import Axes3D
+
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk, messagebox
@@ -311,7 +314,7 @@ class TypingTrainerApp:
         histogram_button = ttk.Button(
             control_frame,
             text="Show stats",
-            command=self.show_histogram
+            command=self.show_stats
         )
         histogram_button.grid(row=0, column=2, padx=(5, 0))
 
@@ -673,9 +676,10 @@ class TypingTrainerApp:
         messagebox.showinfo("Result", message)
 
 
-    def show_histogram(self) -> None:
+    def show_stats(self) -> None:
         """
-        Show histograms of WPM and error rate in a single Matplotlib figure.
+        Show histograms of WPM, error percentage, and a 3D joint histogram
+        in a single Matplotlib figure.
 
         If no statistics file exists or no valid values can be read, an
         information dialog is shown instead.
@@ -690,6 +694,8 @@ class TypingTrainerApp:
 
         wpm_values: List[float] = []
         error_rates: List[float] = []
+        wpm_for_3d: List[float] = []
+        error_for_3d: List[float] = []
 
         with self.stats_file_path.open("r", encoding="utf-8") as stats_file:
             for line in stats_file:
@@ -713,6 +719,8 @@ class TypingTrainerApp:
                         err_val = None
                     if err_val is not None:
                         error_rates.append(err_val)
+                        wpm_for_3d.append(wpm_val)
+                        error_for_3d.append(err_val)
 
         if not wpm_values:
             messagebox.showinfo(
@@ -721,30 +729,122 @@ class TypingTrainerApp:
             )
             return
 
-        fig, axes = plt.subplots(2, 1, figsize=(6, 8))
+        # Create a 2x2 layout where the bottom axis spans both columns for the 3D plot
+        fig = plt.figure(figsize=(10, 8))
+        grid_spec = fig.add_gridspec(2, 2, height_ratios=[1.0, 1.2])
 
-        axes[0].hist(wpm_values, bins="auto")
-        axes[0].set_title("WPM distribution")
-        axes[0].set_xlabel("Words per minute")
-        axes[0].set_ylabel("Frequency")
+        ax_wpm = fig.add_subplot(grid_spec[0, 0])
+        ax_error = fig.add_subplot(grid_spec[0, 1])
+        ax_3d = fig.add_subplot(grid_spec[1, :], projection="3d")
 
+        # 1D histogram of WPM
+        ax_wpm.hist(wpm_values, bins="auto")
+        ax_wpm.set_title("WPM distribution")
+        ax_wpm.set_xlabel("Words per minute")
+        ax_wpm.set_ylabel("Frequency")
+
+        # 1D histogram of error percentage
         if error_rates:
-            axes[1].hist(error_rates, bins="auto")
-            axes[1].set_title("Error percentage distribution")
-            axes[1].set_xlabel("Error percentage (%)")
-            axes[1].set_ylabel("Frequency")
+            ax_error.hist(error_rates, bins="auto")
+            ax_error.set_title("Error percentage distribution")
+            ax_error.set_xlabel("Error percentage (%)")
+            ax_error.set_ylabel("Frequency")
         else:
-            axes[1].set_title("Error percentage distribution")
-            axes[1].text(
+            ax_error.set_title("Error percentage distribution")
+            ax_error.text(
                 0.5,
                 0.5,
                 "No error-rate data available",
                 ha="center",
                 va="center",
-                transform=axes[1].transAxes,
+                transform=ax_error.transAxes
             )
-            axes[1].set_xticks([])
-            axes[1].set_yticks([])
+            ax_error.set_xticks([])
+            ax_error.set_yticks([])
+
+        # 3D joint histogram of WPM vs error percentage
+        if wpm_for_3d and error_for_3d:
+            wpm_arr = np.asarray(wpm_for_3d, dtype=float)
+            error_arr = np.asarray(error_for_3d, dtype=float)
+
+            x_edges = np.histogram_bin_edges(wpm_arr, bins="auto")
+            y_edges = np.histogram_bin_edges(error_arr, bins="auto")
+
+            hist, xedges, yedges = np.histogram2d(
+                wpm_arr,
+                error_arr,
+                bins=[x_edges, y_edges]
+            )
+
+            x_positions = xedges[:-1]
+            y_positions = yedges[:-1]
+            x_sizes = np.diff(xedges)
+            y_sizes = np.diff(yedges)
+
+            xpos, ypos = np.meshgrid(
+                x_positions,
+                y_positions,
+                indexing="ij"
+            )
+            dx, dy = np.meshgrid(
+                x_sizes,
+                y_sizes,
+                indexing="ij"
+            )
+
+            xpos = xpos.ravel()
+            ypos = ypos.ravel()
+            dx = dx.ravel()
+            dy = dy.ravel()
+            dz = hist.ravel()
+
+            nonzero = dz > 0
+            xpos = xpos[nonzero]
+            ypos = ypos[nonzero]
+            dx = dx[nonzero]
+            dy = dy[nonzero]
+            dz = dz[nonzero]
+
+            if dz.size > 0:
+                ax_3d.bar3d(
+                    xpos,
+                    ypos,
+                    np.zeros_like(dz),
+                    dx,
+                    dy,
+                    dz,
+                    shade=True
+                )
+                ax_3d.set_title("Joint WPM / error percentage distribution")
+                ax_3d.set_xlabel("WPM")
+                ax_3d.set_ylabel("Error percentage (%)")
+                ax_3d.set_zlabel("Count")
+            else:
+                ax_3d.set_title("Joint WPM / error percentage distribution")
+                ax_3d.text(
+                    0.5,
+                    0.5,
+                    0.5,
+                    "No combined WPM/error data available",
+                    ha="center",
+                    va="center"
+                )
+                ax_3d.set_xticks([])
+                ax_3d.set_yticks([])
+                ax_3d.set_zticks([])
+        else:
+            ax_3d.set_title("Joint WPM / error percentage distribution")
+            ax_3d.text(
+                0.5,
+                0.5,
+                0.5,
+                "No combined WPM/error data available",
+                ha="center",
+                va="center"
+            )
+            ax_3d.set_xticks([])
+            ax_3d.set_yticks([])
+            ax_3d.set_zticks([])
 
         plt.tight_layout()
         plt.show()
