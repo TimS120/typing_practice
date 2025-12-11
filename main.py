@@ -141,7 +141,12 @@ class TypingTrainerApp:
         self.current_font_size: int = DEFAULT_FONT_SIZE
         self.text_font: tkfont.Font | None = None
 
+        self.error_count: int = 0
+        self.correct_count: int = 0
+        self.previous_text: str = ""
+
         self._build_gui()
+
 
     def _build_gui(self) -> None:
         """
@@ -247,7 +252,10 @@ class TypingTrainerApp:
         )
         font_bigger_button.grid(row=0, column=3, padx=(2, 0), sticky="e")
 
-        self.wpm_label = ttk.Label(right_frame, text="WPM: 0.0")
+        self.wpm_label = ttk.Label(
+            right_frame,
+            text="Time: 0.0 s  |  WPM: 0.0  |  Errors: 0  |  Error %: 0.0"
+        )
         self.wpm_label.grid(row=1, column=0, sticky="e")
 
         self.display_text = tk.Text(
@@ -302,7 +310,7 @@ class TypingTrainerApp:
 
         histogram_button = ttk.Button(
             control_frame,
-            text="Show WPM histogram",
+            text="Show stats",
             command=self.show_histogram
         )
         histogram_button.grid(row=0, column=2, padx=(5, 0))
@@ -315,6 +323,7 @@ class TypingTrainerApp:
         self.display_text.configure(font=self.text_font)
         self.input_text.configure(font=self.text_font)
 
+
     def increase_font_size(self) -> None:
         """
         Increase the font size of the text widgets by one step.
@@ -323,6 +332,7 @@ class TypingTrainerApp:
             return
         self.current_font_size += 2
         self._apply_font_size()
+
 
     def decrease_font_size(self) -> None:
         """
@@ -333,6 +343,7 @@ class TypingTrainerApp:
         self.current_font_size -= 2
         self._apply_font_size()
 
+
     def reset_font_size(self) -> None:
         """
         Reset the font size of the text widgets to the default value.
@@ -340,12 +351,14 @@ class TypingTrainerApp:
         self.current_font_size = DEFAULT_FONT_SIZE
         self._apply_font_size()
 
+
     def _apply_font_size(self) -> None:
         """
         Apply the currently configured font size to both text widgets.
         """
         if self.text_font is not None:
             self.text_font.configure(size=self.current_font_size)
+
 
     def on_load_selected(self) -> None:
         """
@@ -363,6 +376,7 @@ class TypingTrainerApp:
         self.selected_text = self.texts[index]
         self._apply_loaded_text()
 
+
     def on_load_random(self) -> None:
         """
         Load a random text from the list of available texts.
@@ -372,6 +386,7 @@ class TypingTrainerApp:
         self.text_listbox.selection_set(index)
         self.selected_text = self.texts[index]
         self._apply_loaded_text()
+
 
     def _apply_loaded_text(self) -> None:
         """
@@ -395,6 +410,7 @@ class TypingTrainerApp:
 
         self.reset_session(clear_display=False)
 
+
     def reset_session(self, clear_display: bool = False) -> None:
         """
         Reset timing and input state for a new typing session.
@@ -413,11 +429,18 @@ class TypingTrainerApp:
 
         self.start_time = None
         self.finished = False
-        self.wpm_label.configure(text="WPM: 0.0")
+        self.error_count = 0
+        self.correct_count = 0
+        self.previous_text = ""
+
+        self.wpm_label.configure(
+            text="Time: 0.0 s  |  WPM: 0.0  |  Errors: 0  |  Error %: 0.0"
+        )
 
         if self.update_job_id is not None:
             self.master.after_cancel(self.update_job_id)
             self.update_job_id = None
+
 
     def on_key_press(self, event: tk.Event) -> None:
         """
@@ -444,6 +467,7 @@ class TypingTrainerApp:
 
         self.update_typing_state()
 
+
     def schedule_periodic_update(self) -> None:
         """
         Schedule periodic updates of WPM and error highlighting.
@@ -457,6 +481,7 @@ class TypingTrainerApp:
             self.schedule_periodic_update,
         )
 
+
     def update_typing_state(self) -> None:
         """
         Update WPM, highlight errors, and detect completion of the text.
@@ -465,9 +490,47 @@ class TypingTrainerApp:
             return
 
         typed_text = self.input_text.get("1.0", "end-1c")
+
+        # First update cumulative error counter based on the change.
+        self._update_error_counter(self.previous_text, typed_text)
+
+        # Then update current error highlighting and correct-count.
         self.highlight_errors(typed_text)
+
+        # Update statistics row and check for completion.
         self.update_wpm(typed_text)
         self.check_completion(typed_text)
+
+        # Store current text for next comparison.
+        self.previous_text = typed_text
+
+
+    def _update_error_counter(self, previous: str, current: str) -> None:
+        """
+        Update the cumulative error counter based on the change in text.
+
+        An error is counted whenever a new character appears or a character
+        changes and the resulting character does not match the target text
+        at that position.
+        """
+        # Only differences from previous -> current are considered.
+        max_len = len(current)
+        for index in range(max_len):
+            new_char = current[index]
+            old_char = previous[index] if index < len(previous) else None
+
+            # Only consider positions where something changed or was inserted.
+            if old_char is not None and old_char == new_char:
+                continue
+
+            # New or changed char: check if it is wrong.
+            if index >= len(self.target_text):
+                # Beyond end of target: always an error.
+                self.error_count += 1
+            else:
+                if new_char != self.target_text[index]:
+                    self.error_count += 1
+
 
     def highlight_errors(self, typed_text: str) -> None:
         """
@@ -475,9 +538,12 @@ class TypingTrainerApp:
 
         A character is considered incorrect if it does not match the target
         text at the same position. Additional characters beyond the length of
-        the target are also considered incorrect.
+        the target are also considered incorrect. This function also updates
+        the current number of correct characters.
         """
         self.input_text.tag_remove("error", "1.0", tk.END)
+
+        correct = 0
 
         for index, char in enumerate(typed_text):
             if index >= len(self.target_text):
@@ -490,30 +556,50 @@ class TypingTrainerApp:
                 start = f"1.0 + {index} chars"
                 end = f"1.0 + {index + 1} chars"
                 self.input_text.tag_add("error", start, end)
+            else:
+                correct += 1
+
+        self.correct_count = correct
+
 
     def update_wpm(self, typed_text: str) -> None:
-        """
-        Compute the current words per minute and update the label.
-
-        :param typed_text: Text currently typed by the user.
-        """
         if self.start_time is None:
-            self.wpm_label.configure(text="WPM: 0.0")
+            self.wpm_label.configure(
+                text="Time: 0.0 s  |  WPM: 0.0  |  Errors: 0  |  Error %: 0.0"
+            )
             return
 
-        words = len(typed_text.split())
         elapsed_seconds = max(time.time() - self.start_time, 0.0001)
         elapsed_minutes = elapsed_seconds / 60.0
-        wpm = words / elapsed_minutes if elapsed_minutes > 0.0 else 0.0001
 
-        self.wpm_label.configure(text=f"WPM: {wpm:.1f}")
+        words = len(typed_text.split())
+        wpm = words / elapsed_minutes if elapsed_minutes > 0.0 else 0.0
+
+        errors = self.error_count
+        correct = self.correct_count
+
+        total_typed = errors + correct
+        if total_typed <= 0:
+            error_percentage = 0.0
+        else:
+            error_percentage = (errors / total_typed) * 100.0
+
+        self.wpm_label.configure(
+            text=(
+                f"Time: {elapsed_seconds:.1f} s  |  "
+                f"WPM: {wpm:.1f}  |  "
+                f"Errors: {errors}  |  "
+                f"Error %: {error_percentage:.1f}"
+            )
+        )
+
 
     def check_completion(self, typed_text: str) -> None:
         """
         Check whether the user has fully and correctly typed the target text.
 
-        Once the text is completed, the timer is stopped, the final WPM value
-        is frozen, and the result is saved to the statistics file.
+        Once the text is completed, the timer is stopped and the result is
+        saved to the statistics file.
         """
         if typed_text != self.target_text:
             return
@@ -532,22 +618,30 @@ class TypingTrainerApp:
         elapsed_minutes = elapsed_seconds / 60.0
         wpm = words / elapsed_minutes if elapsed_minutes > 0.0 else 0.0
 
-        self.wpm_label.configure(text=f"WPM: {wpm:.1f}")
+        errors = self.error_count
+        correct = self.correct_count
+        total = errors + correct
+        if total <= 0:
+            error_percentage = 0.0
+        else:
+            error_percentage = (errors / total) * 100.0
 
-        self.save_wpm_result(wpm)
+        self.save_wpm_result(wpm, error_percentage)
 
-    def save_wpm_result(self, wpm: float) -> None:
+
+    def save_wpm_result(self, wpm: float, error_percentage: float) -> None:
         """
-        Append the given WPM value to the statistics file.
+        Append the given WPM value and error rate to the statistics file.
 
-        The values are appended as a simple CSV with two columns:
-        timestamp and WPM.
+        The values are appended as a simple CSV with three columns:
+        timestamp;WPM;error_rate.
         """
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        line = f"{timestamp};{wpm:.3f}\n"
+        line = f"{timestamp};{wpm:.3f};{error_percentage:.3f}\n"
         self.stats_file_path.parent.mkdir(parents=True, exist_ok=True)
         with self.stats_file_path.open("a", encoding="utf-8") as stats_file:
             stats_file.write(line)
+
 
     def show_result(self) -> None:
         """
@@ -578,9 +672,10 @@ class TypingTrainerApp:
         )
         messagebox.showinfo("Result", message)
 
+
     def show_histogram(self) -> None:
         """
-        Show a histogram of all stored WPM results in a Matplotlib window.
+        Show histograms of WPM and error rate in a single Matplotlib figure.
 
         If no statistics file exists or no valid values can be read, an
         information dialog is shown instead.
@@ -594,6 +689,7 @@ class TypingTrainerApp:
             return
 
         wpm_values: List[float] = []
+        error_rates: List[float] = []
 
         with self.stats_file_path.open("r", encoding="utf-8") as stats_file:
             for line in stats_file:
@@ -603,11 +699,20 @@ class TypingTrainerApp:
                 parts = line.split(";")
                 if len(parts) < 2:
                     continue
+
                 try:
-                    value = float(parts[1])
+                    wpm_val = float(parts[1])
                 except ValueError:
                     continue
-                wpm_values.append(value)
+                wpm_values.append(wpm_val)
+
+                if len(parts) >= 3:
+                    try:
+                        err_val = float(parts[2])
+                    except ValueError:
+                        err_val = None
+                    if err_val is not None:
+                        error_rates.append(err_val)
 
         if not wpm_values:
             messagebox.showinfo(
@@ -616,11 +721,31 @@ class TypingTrainerApp:
             )
             return
 
-        plt.figure()
-        plt.hist(wpm_values, bins="auto")
-        plt.title("WPM distribution")
-        plt.xlabel("Words per minute")
-        plt.ylabel("Frequency")
+        fig, axes = plt.subplots(2, 1, figsize=(6, 8))
+
+        axes[0].hist(wpm_values, bins="auto")
+        axes[0].set_title("WPM distribution")
+        axes[0].set_xlabel("Words per minute")
+        axes[0].set_ylabel("Frequency")
+
+        if error_rates:
+            axes[1].hist(error_rates, bins="auto")
+            axes[1].set_title("Error percentage distribution")
+            axes[1].set_xlabel("Error percentage (%)")
+            axes[1].set_ylabel("Frequency")
+        else:
+            axes[1].set_title("Error percentage distribution")
+            axes[1].text(
+                0.5,
+                0.5,
+                "No error-rate data available",
+                ha="center",
+                va="center",
+                transform=axes[1].transAxes,
+            )
+            axes[1].set_xticks([])
+            axes[1].set_yticks([])
+
         plt.tight_layout()
         plt.show()
 
