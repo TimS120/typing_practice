@@ -10,13 +10,13 @@ are stored in a statistics file and can be visualized.
 from __future__ import annotations
 
 import random
+import string
 import time
 from pathlib import Path
 from typing import List
 
 import matplotlib.pyplot as plt
 import numpy as np
-from mpl_toolkits.mplot3d import Axes3D
 
 import tkinter as tk
 import tkinter.font as tkfont
@@ -25,10 +25,12 @@ from tkinter import ttk, messagebox
 
 TEXT_FILE_NAME = "typing_texts.txt"
 STATS_FILE_NAME = "typing_stats.csv"
+LETTER_STATS_FILE_NAME = "letter_stats.csv"
 DEFAULT_FONT_FAMILY = "Courier New"
 DEFAULT_FONT_SIZE = 12
 MIN_FONT_SIZE = 6
 MAX_FONT_SIZE = 48
+LETTER_SEQUENCE_LENGTH = 100
 
 
 def get__file_path(file_path: str) -> Path:
@@ -59,7 +61,7 @@ def default_texts() -> List[str]:
         "Python is a powerful and readable programming language.",
         "Consistent practice is the key to becoming a faster typist.",
         "Robots can move precisely if their controllers are "
-        "well designed.",
+        "well designed."
     ]
 
 
@@ -140,6 +142,7 @@ class TypingTrainerApp:
         self.update_job_id: str | None = None
         self.finished: bool = False
         self.stats_file_path: Path = get__file_path(STATS_FILE_NAME)
+        self.letter_stats_file_path: Path = get__file_path(LETTER_STATS_FILE_NAME)
 
         self.current_font_size: int = DEFAULT_FONT_SIZE
         self.text_font: tkfont.Font | None = None
@@ -147,6 +150,13 @@ class TypingTrainerApp:
         self.error_count: int = 0
         self.correct_count: int = 0
         self.previous_text: str = ""
+        self.is_letter_mode: bool = False
+        self.letter_sequence: List[str] = []
+        self.letter_index: int = 0
+        self.letter_total_letters: int = 0
+        self.letter_errors: int = 0
+        self.letter_correct_letters: int = 0
+        self.letter_previous_text: str = ""
 
         self._build_gui()
 
@@ -175,14 +185,14 @@ class TypingTrainerApp:
             row=0,
             column=0,
             sticky="w",
-            pady=(0, 5),
+            pady=(0, 5)
         )
 
         self.text_listbox = tk.Listbox(
             list_frame,
             height=20,
             width=30,
-            exportselection=False,
+            exportselection=False
         )
         self.text_listbox.grid(row=1, column=0, sticky="ns")
 
@@ -201,7 +211,7 @@ class TypingTrainerApp:
         load_button = ttk.Button(
             button_frame,
             text="Load selected",
-            command=self.on_load_selected,
+            command=self.on_load_selected
         )
         load_button.grid(row=0, column=0, sticky="ew", padx=(0, 4))
 
@@ -233,7 +243,7 @@ class TypingTrainerApp:
         # Font size control buttons
         font_smaller_button = ttk.Button(
             top_right_frame,
-            text="A-",
+            text="T-",
             width=3,
             command=self.decrease_font_size
         )
@@ -241,7 +251,7 @@ class TypingTrainerApp:
 
         font_reset_button = ttk.Button(
             top_right_frame,
-            text="A0",
+            text="T0",
             width=3,
             command=self.reset_font_size
         )
@@ -249,7 +259,7 @@ class TypingTrainerApp:
 
         font_bigger_button = ttk.Button(
             top_right_frame,
-            text="A+",
+            text="T+",
             width=3,
             command=self.increase_font_size
         )
@@ -295,7 +305,9 @@ class TypingTrainerApp:
         control_frame.columnconfigure(0, weight=0)
         control_frame.columnconfigure(1, weight=0)
         control_frame.columnconfigure(2, weight=0)
-        control_frame.columnconfigure(3, weight=1)
+        control_frame.columnconfigure(3, weight=0)
+        control_frame.columnconfigure(4, weight=0)
+        control_frame.columnconfigure(5, weight=1)
 
         reset_button = ttk.Button(
             control_frame,
@@ -317,6 +329,20 @@ class TypingTrainerApp:
             command=self.show_stats
         )
         histogram_button.grid(row=0, column=2, padx=(5, 0))
+
+        letter_mode_button = ttk.Button(
+            control_frame,
+            text="Letter mode",
+            command=self.start_letter_mode
+        )
+        letter_mode_button.grid(row=0, column=3, padx=(5, 0))
+
+        letter_stats_button = ttk.Button(
+            control_frame,
+            text="Letter stats",
+            command=self.show_letter_stats
+        )
+        letter_stats_button.grid(row=0, column=4, padx=(5, 0))
 
         # Initialize shared font for both text widgets
         self.text_font = tkfont.Font(
@@ -414,11 +440,16 @@ class TypingTrainerApp:
         self.reset_session(clear_display=False)
 
 
-    def reset_session(self, clear_display: bool = False) -> None:
+    def reset_session(
+        self,
+        clear_display: bool = False,
+        exit_letter_mode: bool = True
+    ) -> None:
         """
         Reset timing and input state for a new typing session.
 
         :param clear_display: Whether the target text display should be cleared.
+        :param exit_letter_mode: Whether letter mode should be deactivated.
         """
         if clear_display:
             self.display_text.configure(state="normal")
@@ -435,6 +466,15 @@ class TypingTrainerApp:
         self.error_count = 0
         self.correct_count = 0
         self.previous_text = ""
+        self.letter_errors = 0
+        self.letter_correct_letters = 0
+        self.letter_previous_text = ""
+
+        if exit_letter_mode:
+            self.is_letter_mode = False
+            self.letter_sequence = []
+            self.letter_index = 0
+            self.letter_total_letters = 0
 
         self.wpm_label.configure(
             text="Time: 0.0 s  |  WPM: 0.0  |  Errors: 0  |  Error %: 0.0"
@@ -445,6 +485,196 @@ class TypingTrainerApp:
             self.update_job_id = None
 
 
+    def start_letter_mode(self) -> None:
+        """
+        Activate the single letter training mode with a new random sequence.
+        """
+        self.reset_session(clear_display=True)
+        self.is_letter_mode = True
+        self.letter_sequence = []
+        previous_lower = ""
+        while len(self.letter_sequence) < LETTER_SEQUENCE_LENGTH:
+            candidate = random.choice(string.ascii_letters)
+            if previous_lower and candidate.lower() == previous_lower:
+                continue
+            self.letter_sequence.append(candidate)
+            previous_lower = candidate.lower()
+        self.letter_index = 0
+        self.letter_total_letters = len(self.letter_sequence)
+        self.letter_errors = 0
+        self.letter_correct_letters = 0
+        self.start_time = None
+        self.info_label.configure(
+            text="Letter mode: random letters (upper/lower). Progress 0/100."
+        )
+        self._update_letter_display()
+        self.update_letter_status_label()
+
+
+    def handle_letter_mode_keypress(self, event: tk.Event) -> None:
+        """
+        Handle key press events while the letter mode is active.
+        """
+        if not self.is_letter_mode:
+            return
+
+        if self.letter_index >= self.letter_total_letters:
+            return
+
+        if self.start_time is None and len(event.char) == 1 and event.char.isprintable():
+            self.start_time = time.time()
+
+        # Ensure we react after Tk has updated the text widget.
+        self.master.after_idle(self._process_letter_mode_input)
+
+
+    def _process_letter_mode_input(self) -> None:
+        """
+        Evaluate the current text widget contents for the letter mode.
+        """
+        if not self.is_letter_mode:
+            return
+
+        if self.letter_index >= self.letter_total_letters:
+            return
+
+        typed_text = self.input_text.get("1.0", "end-1c").replace("\n", "")
+
+        if typed_text == "":
+            self.input_text.tag_remove("error", "1.0", tk.END)
+            self.update_letter_status_label()
+            return
+
+        if len(typed_text) > 1:
+            typed_text = typed_text[-1]
+            self.input_text.delete("1.0", tk.END)
+            self.input_text.insert("1.0", typed_text)
+
+        current_char = typed_text
+        target_letter = self.letter_sequence[self.letter_index]
+
+        if current_char == target_letter:
+            self.letter_correct_letters += 1
+            self.letter_index += 1
+            self.input_text.delete("1.0", tk.END)
+            if self.letter_index >= self.letter_total_letters:
+                self.finish_letter_mode_session()
+            else:
+                self._update_letter_display()
+                self.update_letter_status_label()
+            return
+
+        self.letter_errors += 1
+        self.input_text.delete("1.0", tk.END)
+        self.update_letter_status_label()
+
+
+    def _update_letter_display(self) -> None:
+        """
+        Show the current target letter inside the display text widget.
+        """
+        self.display_text.configure(state="normal")
+        self.display_text.delete("1.0", tk.END)
+
+        if self.is_letter_mode and self.letter_index < self.letter_total_letters:
+            next_letter = self.letter_sequence[self.letter_index]
+            letter_type = "(uppercase letter)" if next_letter.isupper() else ""
+            self.display_text.insert(
+                "1.0",
+                f"{next_letter}\n{letter_type.upper()}"
+            )
+            progress = (
+                f"Letter mode: type the {letter_type} letter shown "
+                f"({self.letter_index}/{self.letter_total_letters})"
+            )
+            self.info_label.configure(text=progress)
+        else:
+            self.info_label.configure(
+                text="Letter mode: No active letter. Click the button to start."
+            )
+
+        self.display_text.configure(state="disabled")
+
+
+    def update_letter_status_label(self) -> None:
+        """
+        Update the shared WPM label with letter mode specific information.
+        """
+        if not self.is_letter_mode:
+            return
+
+        elapsed_seconds = 0.0
+        letters_per_minute = 0.0
+
+        if self.start_time is not None:
+            elapsed_seconds = max(time.time() - self.start_time, 0.0001)
+            elapsed_minutes = elapsed_seconds / 60.0
+            if elapsed_minutes > 0.0:
+                letters_per_minute = self.letter_correct_letters / elapsed_minutes
+
+        progress = f"{self.letter_correct_letters}/{self.letter_total_letters}"
+
+        self.wpm_label.configure(
+            text=(
+                f"Letter mode  |  Time: {elapsed_seconds:.1f} s  |  "
+                f"Letters/min: {letters_per_minute:.1f}  |  "
+                f"Progress: {progress}  |  "
+                f"Errors: {self.letter_errors}"
+            )
+        )
+
+
+    def finish_letter_mode_session(self) -> None:
+        """
+        Finalize the letter mode session and store statistics.
+        """
+        if not self.is_letter_mode:
+            return
+
+        elapsed_seconds = 0.0
+        letters_per_minute = 0.0
+        if self.start_time is not None:
+            elapsed_seconds = max(time.time() - self.start_time, 0.0001)
+            elapsed_minutes = elapsed_seconds / 60.0
+            if elapsed_minutes > 0.0:
+                letters_per_minute = self.letter_correct_letters / elapsed_minutes
+
+        total_letters = max(self.letter_total_letters, 1)
+        error_percentage = (self.letter_errors / total_letters) * 100.0
+
+        self.save_letter_result(letters_per_minute, error_percentage)
+
+        self.display_text.configure(state="normal")
+        self.display_text.delete("1.0", tk.END)
+        self.display_text.insert(
+            "1.0",
+            "Letter mode finished. Click 'Letter mode' to start again."
+        )
+        self.display_text.configure(state="disabled")
+
+        self.info_label.configure(
+            text="Letter mode finished. Start a new run via the Letter mode button."
+        )
+
+        self.wpm_label.configure(
+            text=(
+                f"Letter mode complete  |  Time: {elapsed_seconds:.1f} s  |  "
+                f"Letters/min: {letters_per_minute:.1f}  |  "
+                f"Errors: {self.letter_errors}  |  "
+                f"Error %: {error_percentage:.1f}"
+            )
+        )
+
+        self.input_text.delete("1.0", tk.END)
+        self.is_letter_mode = False
+        self.start_time = None
+        self.letter_sequence = []
+        self.letter_index = 0
+        self.letter_total_letters = 0
+        self.letter_errors = 0
+        self.letter_correct_letters = 0
+
+
     def on_key_press(self, event: tk.Event) -> None:
         """
         Handle key presses in the input box and start timing if needed.
@@ -453,6 +683,10 @@ class TypingTrainerApp:
         updates of WPM and error highlighting. If the text is already finished,
         additional key presses do not change the statistics.
         """
+        if self.is_letter_mode:
+            self.handle_letter_mode_keypress(event)
+            return
+
         if self.target_text == "":
             self.info_label.configure(
                 text="Please select and load a text before typing."
@@ -644,6 +878,23 @@ class TypingTrainerApp:
         self.stats_file_path.parent.mkdir(parents=True, exist_ok=True)
         with self.stats_file_path.open("a", encoding="utf-8") as stats_file:
             stats_file.write(line)
+
+
+    def save_letter_result(
+        self,
+        letters_per_minute: float,
+        error_percentage: float
+    ) -> None:
+        """
+        Append the letter mode statistics to the dedicated CSV file.
+        """
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        line = (
+            f"{timestamp};{letters_per_minute:.3f};{error_percentage:.3f}\n"
+        )
+        self.letter_stats_file_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.letter_stats_file_path.open("a", encoding="utf-8") as file:
+            file.write(line)
 
 
     def show_result(self) -> None:
@@ -839,6 +1090,158 @@ class TypingTrainerApp:
                 0.5,
                 0.5,
                 "No combined WPM/error data available",
+                ha="center",
+                va="center"
+            )
+            ax_3d.set_xticks([])
+            ax_3d.set_yticks([])
+            ax_3d.set_zticks([])
+
+        plt.tight_layout()
+        plt.show()
+
+
+    def show_letter_stats(self) -> None:
+        """
+        Visualize stored letter mode statistics (letters per minute and errors).
+        """
+        if not self.letter_stats_file_path.exists():
+            messagebox.showinfo(
+                "Letter statistics",
+                "No letter statistics available yet. "
+                "Finish at least one letter mode session."
+            )
+            return
+
+        letters_per_minute: List[float] = []
+        error_rates: List[float] = []
+
+        with self.letter_stats_file_path.open("r", encoding="utf-8") as file:
+            for line in file:
+                parts = line.strip().split(";")
+                if len(parts) < 3:
+                    continue
+                try:
+                    lpm_val = float(parts[1])
+                    err_val = float(parts[2])
+                except ValueError:
+                    continue
+                letters_per_minute.append(lpm_val)
+                error_rates.append(err_val)
+
+        if not letters_per_minute:
+            messagebox.showinfo(
+                "Letter statistics",
+                "No valid data inside the letter statistics file."
+            )
+            return
+
+        fig = plt.figure(figsize=(10, 8))
+        grid_spec = fig.add_gridspec(2, 2, height_ratios=[1.0, 1.2])
+
+        ax_speed = fig.add_subplot(grid_spec[0, 0])
+        ax_error = fig.add_subplot(grid_spec[0, 1])
+        ax_3d = fig.add_subplot(grid_spec[1, :], projection="3d")
+
+        ax_speed.hist(letters_per_minute, bins="auto")
+        ax_speed.set_title("Letters per minute distribution")
+        ax_speed.set_xlabel("Letters per minute")
+        ax_speed.set_ylabel("Frequency")
+
+        if error_rates:
+            ax_error.hist(error_rates, bins="auto")
+            ax_error.set_title("Error percentage distribution")
+            ax_error.set_xlabel("Error percentage (%)")
+            ax_error.set_ylabel("Frequency")
+        else:
+            ax_error.set_title("Error percentage distribution")
+            ax_error.text(
+                0.5,
+                0.5,
+                "No error data available",
+                ha="center",
+                va="center",
+                transform=ax_error.transAxes
+            )
+            ax_error.set_xticks([])
+            ax_error.set_yticks([])
+
+        if letters_per_minute and error_rates:
+            lpm_arr = np.asarray(letters_per_minute, dtype=float)
+            error_arr = np.asarray(error_rates, dtype=float)
+
+            x_edges = np.histogram_bin_edges(lpm_arr, bins="auto")
+            y_edges = np.histogram_bin_edges(error_arr, bins="auto")
+
+            hist, xedges, yedges = np.histogram2d(
+                lpm_arr,
+                error_arr,
+                bins=[x_edges, y_edges]
+            )
+
+            x_positions = xedges[:-1]
+            y_positions = yedges[:-1]
+            x_sizes = np.diff(xedges)
+            y_sizes = np.diff(yedges)
+
+            xpos, ypos = np.meshgrid(
+                x_positions,
+                y_positions,
+                indexing="ij"
+            )
+            dx, dy = np.meshgrid(
+                x_sizes,
+                y_sizes,
+                indexing="ij"
+            )
+
+            xpos = xpos.ravel()
+            ypos = ypos.ravel()
+            dx = dx.ravel()
+            dy = dy.ravel()
+            dz = hist.ravel()
+
+            nonzero = dz > 0
+            xpos = xpos[nonzero]
+            ypos = ypos[nonzero]
+            dx = dx[nonzero]
+            dy = dy[nonzero]
+            dz = dz[nonzero]
+
+            if dz.size > 0:
+                ax_3d.bar3d(
+                    xpos,
+                    ypos,
+                    np.zeros_like(dz),
+                    dx,
+                    dy,
+                    dz,
+                    shade=True
+                )
+                ax_3d.set_title("Joint letters/minute and error distribution")
+                ax_3d.set_xlabel("Letters per minute")
+                ax_3d.set_ylabel("Error percentage (%)")
+                ax_3d.set_zlabel("Count")
+            else:
+                ax_3d.set_title("Joint letters/minute and error distribution")
+                ax_3d.text(
+                    0.5,
+                    0.5,
+                    0.5,
+                    "No combined data available",
+                    ha="center",
+                    va="center"
+                )
+                ax_3d.set_xticks([])
+                ax_3d.set_yticks([])
+                ax_3d.set_zticks([])
+        else:
+            ax_3d.set_title("Joint letters/minute and error distribution")
+            ax_3d.text(
+                0.5,
+                0.5,
+                0.5,
+                "No combined data available",
                 ha="center",
                 va="center"
             )
