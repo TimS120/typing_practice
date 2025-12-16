@@ -280,6 +280,18 @@ class TypingTrainerApp:
         )
         self.display_text.grid(row=2, column=0, sticky="nsew")
 
+        # Block copying from the target text widget to force real typing of the user
+        copy_commands = [
+            "<<Copy>>",
+            "<Control-c>",
+            "<Control-C>",
+            "<Command-c>",
+            "<Command-C>",
+            "<Control-Insert>"
+        ]
+        for sequence in copy_commands:
+            self.display_text.bind(sequence, self._block_target_copy)
+
         input_frame = ttk.LabelFrame(right_frame, text="Your input")
         input_frame.grid(row=3, column=0, sticky="nsew", pady=(10, 0))
         input_frame.columnconfigure(0, weight=1)
@@ -352,6 +364,13 @@ class TypingTrainerApp:
         )
         self.display_text.configure(font=self.text_font)
         self.input_text.configure(font=self.text_font)
+
+
+    def _block_target_copy(self, event: tk.Event) -> str:
+        """
+        Prevent copying from the target display widget.
+        """
+        return "break"
 
 
     def increase_font_size(self) -> None:
