@@ -12,6 +12,7 @@ from __future__ import annotations
 import random
 import string
 import time
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import List
 
@@ -387,6 +388,34 @@ class TypingTrainerApp:
         """
         if self.text_font is not None:
             self.text_font.configure(size=self.current_font_size)
+
+    def _configure_figure_window(self, fig: plt.Figure) -> None:
+        """
+        Center a Matplotlib figure and limit its window size to 80% of screen.
+        """
+        manager = getattr(fig.canvas, "manager", None)
+        if manager is None:
+            return
+        window = getattr(manager, "window", None)
+        if window is None:
+            return
+
+        screen_width = self.master.winfo_screenwidth()
+        screen_height = self.master.winfo_screenheight()
+
+        if screen_width <= 0 or screen_height <= 0:
+            return
+
+        target_width = int(screen_width * 0.8)
+        target_height = int(screen_height * 0.8)
+
+        pos_x = int((screen_width - target_width) / 2)
+        pos_y = int((screen_height - target_height) / 2)
+
+        try:
+            window.wm_geometry(f"{target_width}x{target_height}+{pos_x}+{pos_y}")
+        except Exception:
+            pass
 
 
     def on_load_selected(self) -> None:
@@ -947,6 +976,7 @@ class TypingTrainerApp:
         error_rates: List[float] = []
         wpm_for_3d: List[float] = []
         error_for_3d: List[float] = []
+        daily_stats: dict = {}
 
         with self.stats_file_path.open("r", encoding="utf-8") as stats_file:
             for line in stats_file:
@@ -958,11 +988,17 @@ class TypingTrainerApp:
                     continue
 
                 try:
+                    day = datetime.strptime(parts[0], "%Y-%m-%d %H:%M:%S").date()
+                except ValueError:
+                    day = None
+
+                try:
                     wpm_val = float(parts[1])
                 except ValueError:
                     continue
                 wpm_values.append(wpm_val)
 
+                err_val: float | None = None
                 if len(parts) >= 3:
                     try:
                         err_val = float(parts[2])
@@ -973,6 +1009,22 @@ class TypingTrainerApp:
                         wpm_for_3d.append(wpm_val)
                         error_for_3d.append(err_val)
 
+                if day is not None:
+                    entry = daily_stats.setdefault(
+                        day,
+                        {
+                            "wpm_sum": 0.0,
+                            "wpm_count": 0,
+                            "error_sum": 0.0,
+                            "error_count": 0
+                        }
+                    )
+                    entry["wpm_sum"] += wpm_val
+                    entry["wpm_count"] += 1
+                    if err_val is not None:
+                        entry["error_sum"] += err_val
+                        entry["error_count"] += 1
+
         if not wpm_values:
             messagebox.showinfo(
                 "Statistics",
@@ -980,13 +1032,38 @@ class TypingTrainerApp:
             )
             return
 
-        # Create a 2x2 layout where the bottom axis spans both columns for the 3D plot
-        fig = plt.figure(figsize=(10, 8))
-        grid_spec = fig.add_gridspec(2, 2, height_ratios=[1.0, 1.2])
+        daily_dates: List[date] = []
+        daily_wpm: List[float] = []
+        daily_error: List[float] = []
+        if daily_stats:
+            start_date = min(daily_stats)
+            end_date = max(datetime.now().date(), start_date)
+            current_day = start_date
+            while current_day <= end_date:
+                daily_dates.append(current_day)
+                stats = daily_stats.get(current_day)
+                if stats:
+                    daily_wpm.append(stats["wpm_sum"] / stats["wpm_count"])
+                    if stats["error_count"] > 0:
+                        daily_error.append(
+                            stats["error_sum"] / stats["error_count"]
+                        )
+                    else:
+                        daily_error.append(0.0)
+                else:
+                    daily_wpm.append(0.0)
+                    daily_error.append(0.0)
+                current_day += timedelta(days=1)
+
+        # Create a 3-row layout with the 3D and timeline plots spanning both columns
+        fig = plt.figure(figsize=(12, 10))
+        self._configure_figure_window(fig)
+        grid_spec = fig.add_gridspec(3, 2, height_ratios=[1.0, 1.2, 1.0])
 
         ax_wpm = fig.add_subplot(grid_spec[0, 0])
         ax_error = fig.add_subplot(grid_spec[0, 1])
         ax_3d = fig.add_subplot(grid_spec[1, :], projection="3d")
+        ax_time = fig.add_subplot(grid_spec[2, :])
 
         # 1D histogram of WPM
         ax_wpm.hist(wpm_values, bins="auto")
@@ -1097,6 +1174,45 @@ class TypingTrainerApp:
             ax_3d.set_yticks([])
             ax_3d.set_zticks([])
 
+        if daily_dates:
+            positions = np.arange(len(daily_dates))
+            bar_width = 0.4
+            ax_time.bar(
+                positions - bar_width / 2.0,
+                daily_wpm,
+                width=bar_width,
+                color="#7ec8f8",
+                label="Average WPM"
+            )
+            ax_time.bar(
+                positions + bar_width / 2.0,
+                daily_error,
+                width=bar_width,
+                color="#f7c59f",
+                label="Average error %"
+            )
+            ax_time.set_xticks(positions)
+            ax_time.set_xticklabels(
+                [day.strftime("%Y-%m-%d") for day in daily_dates],
+                rotation=45,
+                ha="right"
+            )
+            ax_time.set_ylabel("Daily average")
+            ax_time.set_title("Daily averages (WPM vs error %)")
+            ax_time.legend()
+        else:
+            ax_time.set_title("Daily averages (WPM vs error %)")
+            ax_time.text(
+                0.5,
+                0.5,
+                "No dated entries available",
+                ha="center",
+                va="center",
+                transform=ax_time.transAxes
+            )
+            ax_time.set_xticks([])
+            ax_time.set_yticks([])
+
         plt.tight_layout()
         plt.show()
 
@@ -1115,6 +1231,7 @@ class TypingTrainerApp:
 
         letters_per_minute: List[float] = []
         error_rates: List[float] = []
+        daily_stats: dict = {}
 
         with self.letter_stats_file_path.open("r", encoding="utf-8") as file:
             for line in file:
@@ -1122,12 +1239,29 @@ class TypingTrainerApp:
                 if len(parts) < 3:
                     continue
                 try:
+                    day = datetime.strptime(
+                        parts[0],
+                        "%Y-%m-%d %H:%M:%S"
+                    ).date()
                     lpm_val = float(parts[1])
                     err_val = float(parts[2])
                 except ValueError:
                     continue
                 letters_per_minute.append(lpm_val)
                 error_rates.append(err_val)
+                entry = daily_stats.setdefault(
+                    day,
+                    {
+                        "speed_sum": 0.0,
+                        "speed_count": 0,
+                        "error_sum": 0.0,
+                        "error_count": 0
+                    }
+                )
+                entry["speed_sum"] += lpm_val
+                entry["speed_count"] += 1
+                entry["error_sum"] += err_val
+                entry["error_count"] += 1
 
         if not letters_per_minute:
             messagebox.showinfo(
@@ -1136,12 +1270,37 @@ class TypingTrainerApp:
             )
             return
 
-        fig = plt.figure(figsize=(10, 8))
-        grid_spec = fig.add_gridspec(2, 2, height_ratios=[1.0, 1.2])
+        daily_dates: List[date] = []
+        daily_speed: List[float] = []
+        daily_error: List[float] = []
+        if daily_stats:
+            start_date = min(daily_stats)
+            end_date = max(datetime.now().date(), start_date)
+            current_day = start_date
+            while current_day <= end_date:
+                daily_dates.append(current_day)
+                stats = daily_stats.get(current_day)
+                if stats:
+                    daily_speed.append(stats["speed_sum"] / stats["speed_count"])
+                    if stats["error_count"] > 0:
+                        daily_error.append(
+                            stats["error_sum"] / stats["error_count"]
+                        )
+                    else:
+                        daily_error.append(0.0)
+                else:
+                    daily_speed.append(0.0)
+                    daily_error.append(0.0)
+                current_day += timedelta(days=1)
+
+        fig = plt.figure(figsize=(12, 10))
+        self._configure_figure_window(fig)
+        grid_spec = fig.add_gridspec(3, 2, height_ratios=[1.0, 1.2, 1.0])
 
         ax_speed = fig.add_subplot(grid_spec[0, 0])
         ax_error = fig.add_subplot(grid_spec[0, 1])
         ax_3d = fig.add_subplot(grid_spec[1, :], projection="3d")
+        ax_time = fig.add_subplot(grid_spec[2, :])
 
         ax_speed.hist(letters_per_minute, bins="auto")
         ax_speed.set_title("Letters per minute distribution")
@@ -1248,6 +1407,45 @@ class TypingTrainerApp:
             ax_3d.set_xticks([])
             ax_3d.set_yticks([])
             ax_3d.set_zticks([])
+
+        if daily_dates:
+            positions = np.arange(len(daily_dates))
+            bar_width = 0.4
+            ax_time.bar(
+                positions - bar_width / 2.0,
+                daily_speed,
+                width=bar_width,
+                color="#7ec8f8",
+                label="Average letters/min"
+            )
+            ax_time.bar(
+                positions + bar_width / 2.0,
+                daily_error,
+                width=bar_width,
+                color="#f7c59f",
+                label="Average error %"
+            )
+            ax_time.set_xticks(positions)
+            ax_time.set_xticklabels(
+                [day.strftime("%Y-%m-%d") for day in daily_dates],
+                rotation=45,
+                ha="right"
+            )
+            ax_time.set_ylabel("Daily average")
+            ax_time.set_title("Daily averages (letters/min vs error %)")
+            ax_time.legend()
+        else:
+            ax_time.set_title("Daily averages (letters/min vs error %)")
+            ax_time.text(
+                0.5,
+                0.5,
+                "No dated entries available",
+                ha="center",
+                va="center",
+                transform=ax_time.transAxes
+            )
+            ax_time.set_xticks([])
+            ax_time.set_yticks([])
 
         plt.tight_layout()
         plt.show()
