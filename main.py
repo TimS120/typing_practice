@@ -27,11 +27,13 @@ from tkinter import ttk, messagebox
 TEXT_FILE_NAME = "typing_texts.txt"
 STATS_FILE_NAME = "typing_stats.csv"
 LETTER_STATS_FILE_NAME = "letter_stats.csv"
+NUMBER_STATS_FILE_NAME = "number_stats.csv"
 DEFAULT_FONT_FAMILY = "Courier New"
 DEFAULT_FONT_SIZE = 12
 MIN_FONT_SIZE = 6
 MAX_FONT_SIZE = 48
 LETTER_SEQUENCE_LENGTH = 100
+NUMBER_SEQUENCE_LENGTH = 100
 
 
 def get__file_path(file_path: str) -> Path:
@@ -144,6 +146,7 @@ class TypingTrainerApp:
         self.finished: bool = False
         self.stats_file_path: Path = get__file_path(STATS_FILE_NAME)
         self.letter_stats_file_path: Path = get__file_path(LETTER_STATS_FILE_NAME)
+        self.number_stats_file_path: Path = get__file_path(NUMBER_STATS_FILE_NAME)
 
         self.current_font_size: int = DEFAULT_FONT_SIZE
         self.text_font: tkfont.Font | None = None
@@ -158,6 +161,12 @@ class TypingTrainerApp:
         self.letter_errors: int = 0
         self.letter_correct_letters: int = 0
         self.letter_previous_text: str = ""
+        self.is_number_mode: bool = False
+        self.number_sequence: List[str] = []
+        self.number_index: int = 0
+        self.number_total_digits: int = 0
+        self.number_errors: int = 0
+        self.number_correct_digits: int = 0
 
         self._build_gui()
 
@@ -315,12 +324,9 @@ class TypingTrainerApp:
 
         control_frame = ttk.Frame(right_frame)
         control_frame.grid(row=4, column=0, sticky="ew", pady=(8, 0))
-        control_frame.columnconfigure(0, weight=0)
-        control_frame.columnconfigure(1, weight=0)
-        control_frame.columnconfigure(2, weight=0)
-        control_frame.columnconfigure(3, weight=0)
-        control_frame.columnconfigure(4, weight=0)
-        control_frame.columnconfigure(5, weight=1)
+        for idx in range(7):
+            control_frame.columnconfigure(idx, weight=0)
+        control_frame.columnconfigure(7, weight=1)
 
         reset_button = ttk.Button(
             control_frame,
@@ -356,6 +362,20 @@ class TypingTrainerApp:
             command=self.show_letter_stats
         )
         letter_stats_button.grid(row=0, column=4, padx=(5, 0))
+
+        number_mode_button = ttk.Button(
+            control_frame,
+            text="Number mode",
+            command=self.start_number_mode
+        )
+        number_mode_button.grid(row=0, column=5, padx=(5, 0))
+
+        number_stats_button = ttk.Button(
+            control_frame,
+            text="Number stats",
+            command=self.show_number_stats
+        )
+        number_stats_button.grid(row=0, column=6, padx=(5, 0))
 
         # Initialize shared font for both text widgets
         self.text_font = tkfont.Font(
@@ -491,13 +511,15 @@ class TypingTrainerApp:
     def reset_session(
         self,
         clear_display: bool = False,
-        exit_letter_mode: bool = True
+        exit_letter_mode: bool = True,
+        exit_number_mode: bool = True
     ) -> None:
         """
         Reset timing and input state for a new typing session.
 
-        :param clear_display: Whether the target text display should be cleared.
-        :param exit_letter_mode: Whether letter mode should be deactivated.
+        :param clear_display: Whether the target text display should be cleared
+        :param exit_letter_mode: Whether letter mode should be deactivated
+        :param exit_number_mode: Whether number mode should be deactivated
         """
         if clear_display:
             self.display_text.configure(state="normal")
@@ -517,12 +539,20 @@ class TypingTrainerApp:
         self.letter_errors = 0
         self.letter_correct_letters = 0
         self.letter_previous_text = ""
+        self.number_errors = 0
+        self.number_correct_digits = 0
 
         if exit_letter_mode:
             self.is_letter_mode = False
             self.letter_sequence = []
             self.letter_index = 0
             self.letter_total_letters = 0
+
+        if exit_number_mode:
+            self.is_number_mode = False
+            self.number_sequence = []
+            self.number_index = 0
+            self.number_total_digits = 0
 
         self.wpm_label.configure(
             text="Time: 0.0 s  |  WPM: 0.0  |  Errors: 0  |  Error %: 0.0"
@@ -723,6 +753,194 @@ class TypingTrainerApp:
         self.letter_correct_letters = 0
 
 
+    def start_number_mode(self) -> None:
+        """
+        Activate the numeric keypad training mode with a random digit sequence.
+        """
+        self.reset_session(clear_display=True)
+        self.is_number_mode = True
+        self.number_sequence = []
+        previous_digit = ""
+        while len(self.number_sequence) < NUMBER_SEQUENCE_LENGTH:
+            candidate = random.choice(string.digits)
+            if previous_digit and candidate == previous_digit:
+                continue
+            self.number_sequence.append(candidate)
+            previous_digit = candidate
+        self.number_index = 0
+        self.number_total_digits = len(self.number_sequence)
+        self.number_errors = 0
+        self.number_correct_digits = 0
+        self.start_time = None
+        self.info_label.configure(
+            text="Number mode: type digits with the numeric keypad. Progress 0/100."
+        )
+        self._update_number_display()
+        self.update_number_status_label()
+
+
+    def handle_number_mode_keypress(self, event: tk.Event) -> None:
+        """
+        Handle key press events while the number mode is active.
+        """
+        if not self.is_number_mode:
+            return
+
+        if self.number_index >= self.number_total_digits:
+            return
+
+        if self.start_time is None and len(event.char) == 1 and event.char.isprintable():
+            self.start_time = time.time()
+
+        self.master.after_idle(self._process_number_mode_input)
+
+
+    def _process_number_mode_input(self) -> None:
+        """
+        Evaluate the current text widget contents for the number mode.
+        """
+        if not self.is_number_mode:
+            return
+
+        if self.number_index >= self.number_total_digits:
+            return
+
+        typed_text = self.input_text.get("1.0", "end-1c").replace("\n", "")
+
+        if typed_text == "":
+            self.input_text.tag_remove("error", "1.0", tk.END)
+            self.update_number_status_label()
+            return
+
+        if len(typed_text) > 1:
+            typed_text = typed_text[-1]
+            self.input_text.delete("1.0", tk.END)
+            self.input_text.insert("1.0", typed_text)
+
+        current_char = typed_text
+        target_digit = self.number_sequence[self.number_index]
+
+        if current_char == target_digit:
+            self.number_correct_digits += 1
+            self.number_index += 1
+            self.input_text.delete("1.0", tk.END)
+            if self.number_index >= self.number_total_digits:
+                self.finish_number_mode_session()
+            else:
+                self._update_number_display()
+                self.update_number_status_label()
+            return
+
+        self.number_errors += 1
+        self.input_text.delete("1.0", tk.END)
+        self.update_number_status_label()
+
+
+    def _update_number_display(self) -> None:
+        """
+        Show the current target digit inside the display text widget.
+        """
+        self.display_text.configure(state="normal")
+        self.display_text.delete("1.0", tk.END)
+
+        if self.is_number_mode and self.number_index < self.number_total_digits:
+            next_digit = self.number_sequence[self.number_index]
+            self.display_text.insert(
+                "1.0",
+                f"{next_digit}\n(DIGIT)"
+            )
+            progress = (
+                f"Number mode: type the digit shown "
+                f"({self.number_index}/{self.number_total_digits})"
+            )
+            self.info_label.configure(text=progress)
+        else:
+            self.info_label.configure(
+                text="Number mode: No active digit. Click the button to start."
+            )
+
+        self.display_text.configure(state="disabled")
+
+
+    def update_number_status_label(self) -> None:
+        """
+        Update the shared WPM label with number mode specific information.
+        """
+        if not self.is_number_mode:
+            return
+
+        elapsed_seconds = 0.0
+        digits_per_minute = 0.0
+
+        if self.start_time is not None:
+            elapsed_seconds = max(time.time() - self.start_time, 0.0001)
+            elapsed_minutes = elapsed_seconds / 60.0
+            if elapsed_minutes > 0.0:
+                digits_per_minute = self.number_correct_digits / elapsed_minutes
+
+        progress = f"{self.number_correct_digits}/{self.number_total_digits}"
+
+        self.wpm_label.configure(
+            text=(
+                f"Number mode  |  Time: {elapsed_seconds:.1f} s  |  "
+                f"Digits/min: {digits_per_minute:.1f}  |  "
+                f"Progress: {progress}  |  "
+                f"Errors: {self.number_errors}"
+            )
+        )
+
+
+    def finish_number_mode_session(self) -> None:
+        """
+        Finalize the number mode session and store statistics.
+        """
+        if not self.is_number_mode:
+            return
+
+        elapsed_seconds = 0.0
+        digits_per_minute = 0.0
+        if self.start_time is not None:
+            elapsed_seconds = max(time.time() - self.start_time, 0.0001)
+            elapsed_minutes = elapsed_seconds / 60.0
+            if elapsed_minutes > 0.0:
+                digits_per_minute = self.number_correct_digits / elapsed_minutes
+
+        total_digits = max(self.number_total_digits, 1)
+        error_percentage = (self.number_errors / total_digits) * 100.0
+
+        self.save_number_result(digits_per_minute, error_percentage)
+
+        self.display_text.configure(state="normal")
+        self.display_text.delete("1.0", tk.END)
+        self.display_text.insert(
+            "1.0",
+            "Number mode finished. Click 'Number mode' to start again."
+        )
+        self.display_text.configure(state="disabled")
+
+        self.info_label.configure(
+            text="Number mode finished. Start a new run via the Number mode button."
+        )
+
+        self.wpm_label.configure(
+            text=(
+                f"Number mode complete  |  Time: {elapsed_seconds:.1f} s  |  "
+                f"Digits/min: {digits_per_minute:.1f}  |  "
+                f"Errors: {self.number_errors}  |  "
+                f"Error %: {error_percentage:.1f}"
+            )
+        )
+
+        self.input_text.delete("1.0", tk.END)
+        self.is_number_mode = False
+        self.start_time = None
+        self.number_sequence = []
+        self.number_index = 0
+        self.number_total_digits = 0
+        self.number_errors = 0
+        self.number_correct_digits = 0
+
+
     def on_key_press(self, event: tk.Event) -> None:
         """
         Handle key presses in the input box and start timing if needed.
@@ -733,6 +951,10 @@ class TypingTrainerApp:
         """
         if self.is_letter_mode:
             self.handle_letter_mode_keypress(event)
+            return
+
+        if self.is_number_mode:
+            self.handle_number_mode_keypress(event)
             return
 
         if self.target_text == "":
@@ -942,6 +1164,21 @@ class TypingTrainerApp:
         )
         self.letter_stats_file_path.parent.mkdir(parents=True, exist_ok=True)
         with self.letter_stats_file_path.open("a", encoding="utf-8") as file:
+            file.write(line)
+
+
+    def save_number_result(
+        self,
+        digits_per_minute: float,
+        error_percentage: float
+    ) -> None:
+        """
+        Append the number mode statistics to the dedicated CSV file.
+        """
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        line = f"{timestamp};{digits_per_minute:.3f};{error_percentage:.3f}\n"
+        self.number_stats_file_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.number_stats_file_path.open("a", encoding="utf-8") as file:
             file.write(line)
 
 
@@ -1455,6 +1692,240 @@ class TypingTrainerApp:
             ax_time.legend()
         else:
             ax_time.set_title("Daily averages (letters/min vs error %)")
+            ax_time.text(
+                0.5,
+                0.5,
+                "No dated entries available",
+                ha="center",
+                va="center",
+                transform=ax_time.transAxes
+            )
+            ax_time.set_xticks([])
+            ax_time.set_yticks([])
+
+        plt.tight_layout()
+        plt.show()
+
+
+    def show_number_stats(self) -> None:
+        """
+        Visualize stored number mode statistics (digits per minute and errors).
+        """
+        if not self.number_stats_file_path.exists():
+            messagebox.showinfo(
+                "Number statistics",
+                "No number statistics available yet. "
+                "Finish at least one number mode session."
+            )
+            return
+
+        digits_per_minute: List[float] = []
+        error_rates: List[float] = []
+        daily_stats: dict = {}
+
+        with self.number_stats_file_path.open("r", encoding="utf-8") as file:
+            for line in file:
+                parts = line.strip().split(";")
+                if len(parts) < 3:
+                    continue
+                try:
+                    day = datetime.strptime(
+                        parts[0],
+                        "%Y-%m-%d %H:%M:%S"
+                    ).date()
+                    dpm_val = float(parts[1])
+                    err_val = float(parts[2])
+                except ValueError:
+                    continue
+                digits_per_minute.append(dpm_val)
+                error_rates.append(err_val)
+                entry = daily_stats.setdefault(
+                    day,
+                    {
+                        "speed_sum": 0.0,
+                        "speed_count": 0,
+                        "error_sum": 0.0,
+                        "error_count": 0
+                    }
+                )
+                entry["speed_sum"] += dpm_val
+                entry["speed_count"] += 1
+                entry["error_sum"] += err_val
+                entry["error_count"] += 1
+
+        if not digits_per_minute:
+            messagebox.showinfo(
+                "Number statistics",
+                "No valid data inside the number statistics file."
+            )
+            return
+
+        daily_dates: List[date] = []
+        daily_speed: List[float] = []
+        daily_error: List[float] = []
+        if daily_stats:
+            start_date = min(daily_stats)
+            end_date = max(datetime.now().date(), start_date)
+            current_day = start_date
+            while current_day <= end_date:
+                daily_dates.append(current_day)
+                stats = daily_stats.get(current_day)
+                if stats:
+                    daily_speed.append(stats["speed_sum"] / stats["speed_count"])
+                    if stats["error_count"] > 0:
+                        daily_error.append(
+                            stats["error_sum"] / stats["error_count"]
+                        )
+                    else:
+                        daily_error.append(0.0)
+                else:
+                    daily_speed.append(0.0)
+                    daily_error.append(0.0)
+                current_day += timedelta(days=1)
+
+        fig = plt.figure(figsize=(12, 10))
+        self._configure_figure_window(fig)
+        grid_spec = fig.add_gridspec(3, 2, height_ratios=[1.0, 1.2, 1.0])
+
+        ax_speed = fig.add_subplot(grid_spec[0, 0])
+        ax_error = fig.add_subplot(grid_spec[0, 1])
+        ax_3d = fig.add_subplot(grid_spec[1, :], projection="3d")
+        ax_time = fig.add_subplot(grid_spec[2, :])
+
+        ax_speed.hist(digits_per_minute, bins="auto")
+        ax_speed.set_title("Digits per minute distribution")
+        ax_speed.set_xlabel("Digits per minute")
+        ax_speed.set_ylabel("Frequency")
+
+        if error_rates:
+            ax_error.hist(error_rates, bins="auto")
+            ax_error.set_title("Error percentage distribution")
+            ax_error.set_xlabel("Error percentage (%)")
+            ax_error.set_ylabel("Frequency")
+        else:
+            ax_error.set_title("Error percentage distribution")
+            ax_error.text(
+                0.5,
+                0.5,
+                "No error data available",
+                ha="center",
+                va="center",
+                transform=ax_error.transAxes
+            )
+            ax_error.set_xticks([])
+            ax_error.set_yticks([])
+
+        if digits_per_minute and error_rates:
+            dpm_arr = np.asarray(digits_per_minute, dtype=float)
+            error_arr = np.asarray(error_rates, dtype=float)
+
+            x_edges = np.histogram_bin_edges(dpm_arr, bins="auto")
+            y_edges = np.histogram_bin_edges(error_arr, bins="auto")
+
+            hist, xedges, yedges = np.histogram2d(
+                dpm_arr,
+                error_arr,
+                bins=[x_edges, y_edges]
+            )
+
+            x_positions = xedges[:-1]
+            y_positions = yedges[:-1]
+            x_sizes = np.diff(xedges)
+            y_sizes = np.diff(yedges)
+
+            xpos, ypos = np.meshgrid(
+                x_positions,
+                y_positions,
+                indexing="ij"
+            )
+            dx, dy = np.meshgrid(
+                x_sizes,
+                y_sizes,
+                indexing="ij"
+            )
+
+            xpos = xpos.ravel()
+            ypos = ypos.ravel()
+            dx = dx.ravel()
+            dy = dy.ravel()
+            dz = hist.ravel()
+
+            nonzero = dz > 0
+            xpos = xpos[nonzero]
+            ypos = ypos[nonzero]
+            dx = dx[nonzero]
+            dy = dy[nonzero]
+            dz = dz[nonzero]
+
+            if dz.size > 0:
+                ax_3d.bar3d(
+                    xpos,
+                    ypos,
+                    np.zeros_like(dz),
+                    dx,
+                    dy,
+                    dz,
+                    shade=True
+                )
+                ax_3d.set_title("Joint digits/minute and error distribution")
+                ax_3d.set_xlabel("Digits per minute")
+                ax_3d.set_ylabel("Error percentage (%)")
+                ax_3d.set_zlabel("Count")
+            else:
+                ax_3d.set_title("Joint digits/minute and error distribution")
+                ax_3d.text(
+                    0.5,
+                    0.5,
+                    0.5,
+                    "No combined data available",
+                    ha="center",
+                    va="center"
+                )
+                ax_3d.set_xticks([])
+                ax_3d.set_yticks([])
+                ax_3d.set_zticks([])
+        else:
+            ax_3d.set_title("Joint digits/minute and error distribution")
+            ax_3d.text(
+                0.5,
+                0.5,
+                0.5,
+                "No combined data available",
+                ha="center",
+                va="center"
+            )
+            ax_3d.set_xticks([])
+            ax_3d.set_yticks([])
+            ax_3d.set_zticks([])
+
+        if daily_dates:
+            positions = np.arange(len(daily_dates))
+            bar_width = 0.4
+            ax_time.bar(
+                positions - bar_width / 2.0,
+                daily_speed,
+                width=bar_width,
+                color="#7ec8f8",
+                label="Average digits/min"
+            )
+            ax_time.bar(
+                positions + bar_width / 2.0,
+                daily_error,
+                width=bar_width,
+                color="#f7c59f",
+                label="Average error %"
+            )
+            ax_time.set_xticks(positions)
+            ax_time.set_xticklabels(
+                [day.strftime("%Y-%m-%d") for day in daily_dates],
+                rotation=45,
+                ha="right"
+            )
+            ax_time.set_ylabel("Daily average")
+            ax_time.set_title("Daily averages (digits/min vs error %)")
+            ax_time.legend()
+        else:
+            ax_time.set_title("Daily averages (digits/min vs error %)")
             ax_time.text(
                 0.5,
                 0.5,
