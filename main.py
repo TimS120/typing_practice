@@ -1253,23 +1253,37 @@ class TypingTrainerApp:
         changes and the resulting character does not match the target text
         at that position.
         """
-        # Only differences from previous -> current are considered.
-        max_len = len(current)
-        for index in range(max_len):
+        # Fast path when nothing changed
+        if previous == current:
+            return
+
+        # Determine the common prefix where everything is identical
+        prefix_len = 0
+        max_prefix = min(len(previous), len(current))
+        while (
+            prefix_len < max_prefix
+            and previous[prefix_len] == current[prefix_len]
+        ):
+            prefix_len += 1
+
+        # Determine the common suffix (after the prefix) that is also identical
+        prev_suffix = len(previous)
+        curr_suffix = len(current)
+        while (
+            prev_suffix > prefix_len
+            and curr_suffix > prefix_len
+            and previous[prev_suffix - 1] == current[curr_suffix - 1]
+        ):
+            prev_suffix -= 1
+            curr_suffix -= 1
+
+        # Only examine the truly new/changed characters in the current text
+        for index in range(prefix_len, curr_suffix):
             new_char = current[index]
-            old_char = previous[index] if index < len(previous) else None
-
-            # Only consider positions where something changed or was inserted.
-            if old_char is not None and old_char == new_char:
-                continue
-
-            # New or changed char: check if it is wrong.
             if index >= len(self.target_text):
-                # Beyond end of target: always an error.
                 self.error_count += 1
-            else:
-                if new_char != self.target_text[index]:
-                    self.error_count += 1
+            elif new_char != self.target_text[index]:
+                self.error_count += 1
 
 
     def highlight_errors(self, typed_text: str) -> None:
