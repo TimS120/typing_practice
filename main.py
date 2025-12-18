@@ -441,16 +441,9 @@ class TypingTrainerApp:
         )
         reset_button.grid(row=0, column=0, padx=(0, 5))
 
-        show_stats_button = ttk.Button(
-            control_frame,
-            text="Show result",
-            command=self.show_result
-        )
-        show_stats_button.grid(row=0, column=1, padx=(5, 5))
-
         histogram_button = ttk.Button(
             control_frame,
-            text="Show stats",
+            text="Typing text stats",
             command=self.show_stats
         )
         histogram_button.grid(row=0, column=2, padx=(5, 0))
