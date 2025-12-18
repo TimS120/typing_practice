@@ -32,6 +32,9 @@ TEXT_FILE_NAME = "typing_texts.txt"
 STATS_FILE_NAME = "typing_stats.csv"
 LETTER_STATS_FILE_NAME = "letter_stats.csv"
 NUMBER_STATS_FILE_NAME = "number_stats.csv"
+STATS_FILE_HEADER = "timestamp;wpm;error_percentage"
+LETTER_STATS_FILE_HEADER = "timestamp;letters_per_minute;error_percentage"
+NUMBER_STATS_FILE_HEADER = "timestamp;digits_per_minute;error_percentage"
 DEFAULT_FONT_FAMILY = "Courier New"
 DEFAULT_FONT_SIZE = 12
 MIN_FONT_SIZE = 6
@@ -127,6 +130,36 @@ def load_or_create_texts(path: Path) -> List[str]:
         path.write_text(content, encoding="utf-8")
 
     return texts
+
+
+def ensure_stats_file_header(
+    path: Path,
+    header: str,
+    create_if_missing: bool = True
+) -> None:
+    """
+    Make sure the statistics file exists and starts with the given header line.
+
+    If the file is missing and creation is allowed, the header line is written.
+    When the file already exists but lacks the requested header, the header is
+    inserted as the first line while preserving the existing data.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    if not path.exists():
+        if create_if_missing:
+            path.write_text(f"{header}\n", encoding="utf-8")
+        return
+
+    with path.open("r+", encoding="utf-8") as file:
+        first_line = file.readline().strip()
+        if first_line == header:
+            return
+        file.seek(0)
+        existing_content = file.read()
+        file.seek(0)
+        file.write(f"{header}\n")
+        file.write(existing_content)
 
 
 class TypingTrainerApp:
@@ -1392,7 +1425,7 @@ class TypingTrainerApp:
         """
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         line = f"{timestamp};{wpm:.3f};{error_percentage:.3f}\n"
-        self.stats_file_path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_stats_file_header(self.stats_file_path, STATS_FILE_HEADER)
         with self.stats_file_path.open("a", encoding="utf-8") as stats_file:
             stats_file.write(line)
 
@@ -1409,7 +1442,10 @@ class TypingTrainerApp:
         line = (
             f"{timestamp};{letters_per_minute:.3f};{error_percentage:.3f}\n"
         )
-        self.letter_stats_file_path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_stats_file_header(
+            self.letter_stats_file_path,
+            LETTER_STATS_FILE_HEADER
+        )
         with self.letter_stats_file_path.open("a", encoding="utf-8") as file:
             file.write(line)
 
@@ -1424,7 +1460,10 @@ class TypingTrainerApp:
         """
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         line = f"{timestamp};{digits_per_minute:.3f};{error_percentage:.3f}\n"
-        self.number_stats_file_path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_stats_file_header(
+            self.number_stats_file_path,
+            NUMBER_STATS_FILE_HEADER
+        )
         with self.number_stats_file_path.open("a", encoding="utf-8") as file:
             file.write(line)
 
@@ -1474,6 +1513,12 @@ class TypingTrainerApp:
                 "Finish at least one session."
             )
             return
+
+        ensure_stats_file_header(
+            self.stats_file_path,
+            STATS_FILE_HEADER,
+            create_if_missing=False
+        )
 
         wpm_values: List[float] = []
         error_rates: List[float] = []
@@ -1732,6 +1777,12 @@ class TypingTrainerApp:
             )
             return
 
+        ensure_stats_file_header(
+            self.letter_stats_file_path,
+            LETTER_STATS_FILE_HEADER,
+            create_if_missing=False
+        )
+
         letters_per_minute: List[float] = []
         error_rates: List[float] = []
         daily_stats: dict = {}
@@ -1965,6 +2016,12 @@ class TypingTrainerApp:
                 "Finish at least one number mode session."
             )
             return
+
+        ensure_stats_file_header(
+            self.number_stats_file_path,
+            NUMBER_STATS_FILE_HEADER,
+            create_if_missing=False
+        )
 
         digits_per_minute: List[float] = []
         error_rates: List[float] = []
