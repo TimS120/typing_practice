@@ -56,6 +56,40 @@ TEXT_GENERATION_MAX_LENGTH = 200
 TEXT_GENERATION_TEMPERATURE = 0.95
 TEXT_GENERATION_TOP_P = 0.92
 TEXT_GENERATION_TOP_K = 50
+LIGHT_THEME = {
+    "background": "#f4f4f4",
+    "surface": "#ffffff",
+    "text": "#111111",
+    "muted_text": "#333333",
+    "accent": "#3a7afe",
+    "button_background": "#e1e1e1",
+    "button_foreground": "#111111",
+    "button_active_background": "#d0d0d0",
+    "input_background": "#ffffff",
+    "input_foreground": "#111111",
+    "select_background": "#cde2ff",
+    "select_foreground": "#111111",
+    "error_background": "#ffd6d6",
+    "error_foreground": "#7a0000",
+    "border": "#c0c0c0"
+}
+DARK_THEME = {
+    "background": "#121212",
+    "surface": "#1f1f1f",
+    "text": "#f4f4f4",
+    "muted_text": "#c6c6c6",
+    "accent": "#569cd6",
+    "button_background": "#333333",
+    "button_foreground": "#f4f4f4",
+    "button_active_background": "#3f3f3f",
+    "input_background": "#1f1f1f",
+    "input_foreground": "#f4f4f4",
+    "select_background": "#264f78",
+    "select_foreground": "#f4f4f4",
+    "error_background": "#5c1b1b",
+    "error_foreground": "#ffb4b4",
+    "border": "#3a3a3a"
+}
 
 
 def get__file_path(file_path: str) -> Path:
@@ -221,6 +255,9 @@ class TypingTrainerApp:
         self.number_total_digits: int = 0
         self.number_errors: int = 0
         self.number_correct_digits: int = 0
+        self.style = ttk.Style()
+        self.dark_mode_enabled: bool = False
+        self.dark_mode_var = tk.BooleanVar(master=self.master, value=False)
 
         self._build_gui()
         self._schedule_generator_warmup()
@@ -300,6 +337,7 @@ class TypingTrainerApp:
         top_right_frame.columnconfigure(1, weight=0)
         top_right_frame.columnconfigure(2, weight=0)
         top_right_frame.columnconfigure(3, weight=0)
+        top_right_frame.columnconfigure(4, weight=0)
 
         self.info_label = ttk.Label(
             top_right_frame,
@@ -331,6 +369,13 @@ class TypingTrainerApp:
             command=self.increase_font_size
         )
         font_bigger_button.grid(row=0, column=3, padx=(2, 0), sticky="e")
+        self.dark_mode_toggle = ttk.Checkbutton(
+            top_right_frame,
+            text="Dark mode",
+            variable=self.dark_mode_var,
+            command=self.toggle_dark_mode
+        )
+        self.dark_mode_toggle.grid(row=0, column=4, padx=(10, 0), sticky="e")
 
         self.wpm_label = ttk.Label(
             right_frame,
@@ -441,6 +486,7 @@ class TypingTrainerApp:
         )
         self.display_text.configure(font=self.text_font)
         self.input_text.configure(font=self.text_font)
+        self._apply_theme()
 
 
     def _set_info_text(self, text: str) -> None:
@@ -516,6 +562,97 @@ class TypingTrainerApp:
         """
         if self.text_font is not None:
             self.text_font.configure(size=self.current_font_size)
+
+    def toggle_dark_mode(self) -> None:
+        """
+        Enable or disable the dark theme for the UI.
+        """
+        self.dark_mode_enabled = bool(self.dark_mode_var.get())
+        self._apply_theme()
+
+    def _apply_theme(self) -> None:
+        """
+        Apply the currently selected color theme to Tk and ttk widgets.
+        """
+        theme = DARK_THEME if self.dark_mode_enabled else LIGHT_THEME
+
+        try:
+            self.style.theme_use("clam")
+        except tk.TclError:
+            # Fall back to the original theme if clam is unavailable.
+            pass
+
+        self.master.configure(bg=theme["background"])
+
+        # ttk widget styling
+        self.style.configure("TFrame", background=theme["background"])
+        self.style.configure(
+            "TLabel",
+            background=theme["background"],
+            foreground=theme["text"]
+        )
+        self.style.configure(
+            "TButton",
+            background=theme["button_background"],
+            foreground=theme["button_foreground"]
+        )
+        self.style.map(
+            "TButton",
+            background=[
+                ("active", theme["button_active_background"]),
+                ("pressed", theme["button_active_background"])
+            ]
+        )
+        self.style.configure(
+            "TLabelframe",
+            background=theme["background"],
+            foreground=theme["text"],
+            bordercolor=theme["border"]
+        )
+        self.style.configure(
+            "TLabelframe.Label",
+            background=theme["background"],
+            foreground=theme["text"]
+        )
+        self.style.configure(
+            "TCheckbutton",
+            background=theme["background"],
+            foreground=theme["text"]
+        )
+
+        # Classic Tk widgets require manual configuration.
+        self.display_text.configure(
+            background=theme["surface"],
+            foreground=theme["text"],
+            insertbackground=theme["text"],
+            highlightbackground=theme["border"],
+            highlightcolor=theme["accent"],
+            selectbackground=theme["select_background"],
+            selectforeground=theme["select_foreground"]
+        )
+        self.input_text.configure(
+            background=theme["input_background"],
+            foreground=theme["input_foreground"],
+            insertbackground=theme["text"],
+            highlightbackground=theme["border"],
+            highlightcolor=theme["accent"],
+            selectbackground=theme["select_background"],
+            selectforeground=theme["select_foreground"]
+        )
+        self.input_text.tag_configure(
+            "error",
+            foreground=theme["error_foreground"],
+            background=theme["error_background"]
+        )
+        self.text_listbox.configure(
+            background=theme["surface"],
+            foreground=theme["text"],
+            selectbackground=theme["select_background"],
+            selectforeground=theme["select_foreground"],
+            highlightbackground=theme["border"],
+            highlightcolor=theme["accent"],
+            activestyle="none"
+        )
 
     def _configure_figure_window(self, fig: plt.Figure) -> None:
         """
