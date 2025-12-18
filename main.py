@@ -12,6 +12,7 @@ from __future__ import annotations
 import random
 import string
 import time
+import textwrap
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import List, TYPE_CHECKING
@@ -48,6 +49,8 @@ MIN_FONT_SIZE = 6
 MAX_FONT_SIZE = 48
 LETTER_SEQUENCE_LENGTH = 100
 NUMBER_SEQUENCE_LENGTH = 100
+TARGET_TEXT_DISPLAY_WIDTH = 90
+TARGET_TEXT_LINE_LENGTH = 80
 RANDOM_TEXT_LABEL = "Random Text"
 RANDOM_TEXT_CHAR_LIMIT = 300
 RANDOM_MAX_GENERATIONS = 4
@@ -386,6 +389,7 @@ class TypingTrainerApp:
         self.display_text = tk.Text(
             right_frame,
             height=6,
+            width=TARGET_TEXT_DISPLAY_WIDTH,
             wrap="word",
             state="disabled"
         )
@@ -895,6 +899,36 @@ class TypingTrainerApp:
         return truncated.strip()
 
 
+    def _format_target_text(self, lines: List[str]) -> str:
+        """
+        Wrap target text lines to the configured width without splitting words.
+        """
+        wrapper = textwrap.TextWrapper(
+            width=TARGET_TEXT_LINE_LENGTH,
+            expand_tabs=True,
+            replace_whitespace=False,
+            drop_whitespace=True,
+            break_long_words=False,
+            break_on_hyphens=False
+        )
+        formatted_lines: List[str] = []
+
+        for line in lines:
+            stripped_line = line.rstrip()
+            if stripped_line == "":
+                formatted_lines.append("")
+                continue
+
+            wrapped_line = wrapper.wrap(stripped_line)
+            if not wrapped_line:
+                formatted_lines.append("")
+                continue
+
+            formatted_lines.extend(part.rstrip() for part in wrapped_line)
+
+        return "\n".join(formatted_lines)
+
+
     def _apply_loaded_text(self) -> None:
         """
         Display the selected text and reset the typing session.
@@ -903,7 +937,7 @@ class TypingTrainerApp:
             line.rstrip()
             for line in self.selected_text.splitlines()
         ]
-        self.target_text = "\n".join(normalized_lines)
+        self.target_text = self._format_target_text(normalized_lines)
 
         self.display_text.configure(state="normal")
         self.display_text.delete("1.0", tk.END)
