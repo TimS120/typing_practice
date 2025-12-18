@@ -18,6 +18,7 @@ from typing import List, TYPE_CHECKING
 import threading
 
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 import numpy as np
 
 if TYPE_CHECKING:
@@ -32,9 +33,15 @@ TEXT_FILE_NAME = "typing_texts.txt"
 STATS_FILE_NAME = "typing_stats.csv"
 LETTER_STATS_FILE_NAME = "letter_stats.csv"
 NUMBER_STATS_FILE_NAME = "number_stats.csv"
-STATS_FILE_HEADER = "timestamp;wpm;error_percentage"
-LETTER_STATS_FILE_HEADER = "timestamp;letters_per_minute;error_percentage"
-NUMBER_STATS_FILE_HEADER = "timestamp;digits_per_minute;error_percentage"
+STATS_FILE_HEADER = (
+    "timestamp;wpm;error_percentage;duration_seconds"
+)
+LETTER_STATS_FILE_HEADER = (
+    "timestamp;letters_per_minute;error_percentage;duration_seconds"
+)
+NUMBER_STATS_FILE_HEADER = (
+    "timestamp;digits_per_minute;error_percentage;duration_seconds"
+)
 DEFAULT_FONT_FAMILY = "Courier New"
 DEFAULT_FONT_SIZE = 12
 MIN_FONT_SIZE = 6
@@ -986,7 +993,11 @@ class TypingTrainerApp:
         total_letters = max(self.letter_total_letters, 1)
         error_percentage = (self.letter_errors / total_letters) * 100.0
 
-        self.save_letter_result(letters_per_minute, error_percentage)
+        self.save_letter_result(
+            letters_per_minute,
+            error_percentage,
+            elapsed_seconds
+        )
 
         self.display_text.configure(state="normal")
         self.display_text.delete("1.0", tk.END)
@@ -1174,7 +1185,11 @@ class TypingTrainerApp:
         total_digits = max(self.number_total_digits, 1)
         error_percentage = (self.number_errors / total_digits) * 100.0
 
-        self.save_number_result(digits_per_minute, error_percentage)
+        self.save_number_result(
+            digits_per_minute,
+            error_percentage,
+            elapsed_seconds
+        )
 
         self.display_text.configure(state="normal")
         self.display_text.delete("1.0", tk.END)
@@ -1413,18 +1428,25 @@ class TypingTrainerApp:
         else:
             error_percentage = (errors / total) * 100.0
 
-        self.save_wpm_result(wpm, error_percentage)
+        self.save_wpm_result(wpm, error_percentage, elapsed_seconds)
 
 
-    def save_wpm_result(self, wpm: float, error_percentage: float) -> None:
+    def save_wpm_result(
+        self,
+        wpm: float,
+        error_percentage: float,
+        duration_seconds: float
+    ) -> None:
         """
         Append the given WPM value and error rate to the statistics file.
 
-        The values are appended as a simple CSV with three columns:
-        timestamp;WPM;error_rate.
+        The values are appended as a simple CSV with four columns:
+        timestamp;WPM;error_rate;duration_seconds.
         """
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        line = f"{timestamp};{wpm:.3f};{error_percentage:.3f}\n"
+        line = (
+            f"{timestamp};{wpm:.3f};{error_percentage:.3f};{duration_seconds:.3f}\n"
+        )
         ensure_stats_file_header(self.stats_file_path, STATS_FILE_HEADER)
         with self.stats_file_path.open("a", encoding="utf-8") as stats_file:
             stats_file.write(line)
@@ -1433,14 +1455,16 @@ class TypingTrainerApp:
     def save_letter_result(
         self,
         letters_per_minute: float,
-        error_percentage: float
+        error_percentage: float,
+        duration_seconds: float
     ) -> None:
         """
         Append the letter mode statistics to the dedicated CSV file.
         """
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         line = (
-            f"{timestamp};{letters_per_minute:.3f};{error_percentage:.3f}\n"
+            f"{timestamp};{letters_per_minute:.3f};"
+            f"{error_percentage:.3f};{duration_seconds:.3f}\n"
         )
         ensure_stats_file_header(
             self.letter_stats_file_path,
@@ -1453,13 +1477,17 @@ class TypingTrainerApp:
     def save_number_result(
         self,
         digits_per_minute: float,
-        error_percentage: float
+        error_percentage: float,
+        duration_seconds: float
     ) -> None:
         """
         Append the number mode statistics to the dedicated CSV file.
         """
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        line = f"{timestamp};{digits_per_minute:.3f};{error_percentage:.3f}\n"
+        line = (
+            f"{timestamp};{digits_per_minute:.3f};"
+            f"{error_percentage:.3f};{duration_seconds:.3f}\n"
+        )
         ensure_stats_file_header(
             self.number_stats_file_path,
             NUMBER_STATS_FILE_HEADER
@@ -1557,6 +1585,13 @@ class TypingTrainerApp:
                         wpm_for_3d.append(wpm_val)
                         error_for_3d.append(err_val)
 
+                duration_val: float | None = None
+                if len(parts) >= 4:
+                    try:
+                        duration_val = float(parts[3])
+                    except ValueError:
+                        duration_val = None
+
                 if day is not None:
                     entry = daily_stats.setdefault(
                         day,
@@ -1564,7 +1599,8 @@ class TypingTrainerApp:
                             "wpm_sum": 0.0,
                             "wpm_count": 0,
                             "error_sum": 0.0,
-                            "error_count": 0
+                            "error_count": 0,
+                            "duration_sum": 0.0,
                         }
                     )
                     entry["wpm_sum"] += wpm_val
@@ -1572,6 +1608,8 @@ class TypingTrainerApp:
                     if err_val is not None:
                         entry["error_sum"] += err_val
                         entry["error_count"] += 1
+                    if duration_val is not None:
+                        entry["duration_sum"] += max(duration_val, 0.0)
 
         if not wpm_values:
             messagebox.showinfo(
@@ -1583,6 +1621,7 @@ class TypingTrainerApp:
         daily_dates: List[date] = []
         daily_wpm: List[float] = []
         daily_error: List[float] = []
+        daily_duration_minutes: List[float] = []
         if daily_stats:
             start_date = min(daily_stats)
             end_date = max(datetime.now().date(), start_date)
@@ -1598,20 +1637,26 @@ class TypingTrainerApp:
                         )
                     else:
                         daily_error.append(0.0)
+                    daily_duration_minutes.append(
+                        stats.get("duration_sum", 0.0) / 60.0
+                    )
                 else:
                     daily_wpm.append(0.0)
                     daily_error.append(0.0)
+                    daily_duration_minutes.append(0.0)
                 current_day += timedelta(days=1)
 
         # Create a 3-row layout with the 3D and timeline plots spanning both columns
         fig = plt.figure(figsize=(12, 10))
         self._configure_figure_window(fig)
-        grid_spec = fig.add_gridspec(3, 2, height_ratios=[1.0, 1.2, 1.0])
+        grid_spec = fig.add_gridspec(4, 2, height_ratios=[1.0, 1.2, 1.0, 0.8])
 
         ax_wpm = fig.add_subplot(grid_spec[0, 0])
         ax_error = fig.add_subplot(grid_spec[0, 1])
         ax_3d = fig.add_subplot(grid_spec[1, :], projection="3d")
         ax_time = fig.add_subplot(grid_spec[2, :])
+        ax_time_spent = fig.add_subplot(grid_spec[3, :])
+        ax_time_spent_right = ax_time_spent.twinx()
 
         # 1D histogram of WPM
         ax_wpm.hist(wpm_values, bins="auto")
@@ -1724,30 +1769,75 @@ class TypingTrainerApp:
 
         if daily_dates:
             positions = np.arange(len(daily_dates))
-            bar_width = 0.4
+            bar_width = 0.25
             ax_time.bar(
-                positions - bar_width / 2.0,
+                positions - bar_width,
                 daily_wpm,
                 width=bar_width,
                 color="#7ec8f8",
                 label="Average WPM"
             )
             ax_time.bar(
-                positions + bar_width / 2.0,
+                positions,
                 daily_error,
                 width=bar_width,
                 color="#f7c59f",
                 label="Average error %"
             )
+            ax_time.bar(
+                positions + bar_width,
+                daily_duration_minutes,
+                width=bar_width,
+                color="#a5d6a7",
+                label="Total time (min)"
+            )
+            formatted_days = [day.strftime("%Y-%m-%d") for day in daily_dates]
             ax_time.set_xticks(positions)
             ax_time.set_xticklabels(
-                [day.strftime("%Y-%m-%d") for day in daily_dates],
+                formatted_days,
                 rotation=45,
                 ha="right"
             )
-            ax_time.set_ylabel("Daily average")
+            ax_time.set_ylabel("Daily averages / total time")
             ax_time.set_title("Daily averages (WPM vs error %)")
             ax_time.legend()
+
+            cumulative_duration_minutes: List[float] = []
+            running_total = 0.0
+            for minutes in daily_duration_minutes:
+                running_total += minutes
+                cumulative_duration_minutes.append(running_total)
+
+            ax_time_spent.bar(
+                positions,
+                daily_duration_minutes,
+                width=0.4,
+                color="#bcd4e6",
+                label="Time per day (min)"
+            )
+            ax_time_spent_right.plot(
+                positions,
+                cumulative_duration_minutes,
+                color="#33658a",
+                marker="o",
+                label="Cumulative time (min)"
+            )
+            ax_time_spent.set_xticks(positions)
+            ax_time_spent.set_xticklabels(
+                formatted_days,
+                rotation=45,
+                ha="right"
+            )
+            ax_time_spent.set_ylabel("Daily time (min)")
+            ax_time_spent_right.set_ylabel("Cumulative time (min)")
+            ax_time_spent.set_title("Time spent per day")
+            handles, labels = ax_time_spent.get_legend_handles_labels()
+            handles2, labels2 = ax_time_spent_right.get_legend_handles_labels()
+            ax_time_spent.legend(
+                handles + handles2,
+                labels + labels2,
+                loc="upper left"
+            )
         else:
             ax_time.set_title("Daily averages (WPM vs error %)")
             ax_time.text(
@@ -1760,6 +1850,21 @@ class TypingTrainerApp:
             )
             ax_time.set_xticks([])
             ax_time.set_yticks([])
+            ax_time_spent.set_title("Time spent per day")
+            ax_time_spent.text(
+                0.5,
+                0.5,
+                "No dated entries available",
+                ha="center",
+                va="center",
+                transform=ax_time_spent.transAxes
+            )
+            ax_time_spent.set_xticks([])
+            ax_time_spent.set_yticks([])
+            ax_time_spent_right.set_yticks([])
+        formatter = mticker.FormatStrFormatter("%.1f")
+        ax_time_spent.yaxis.set_major_formatter(formatter)
+        ax_time_spent_right.yaxis.set_major_formatter(formatter)
 
         plt.tight_layout()
         plt.show()
@@ -1801,6 +1906,12 @@ class TypingTrainerApp:
                     err_val = float(parts[2])
                 except ValueError:
                     continue
+                duration_val: float | None = None
+                if len(parts) >= 4:
+                    try:
+                        duration_val = float(parts[3])
+                    except ValueError:
+                        duration_val = None
                 letters_per_minute.append(lpm_val)
                 error_rates.append(err_val)
                 entry = daily_stats.setdefault(
@@ -1809,13 +1920,16 @@ class TypingTrainerApp:
                         "speed_sum": 0.0,
                         "speed_count": 0,
                         "error_sum": 0.0,
-                        "error_count": 0
+                        "error_count": 0,
+                        "duration_sum": 0.0,
                     }
                 )
                 entry["speed_sum"] += lpm_val
                 entry["speed_count"] += 1
                 entry["error_sum"] += err_val
                 entry["error_count"] += 1
+                if duration_val is not None:
+                    entry["duration_sum"] += max(duration_val, 0.0)
 
         if not letters_per_minute:
             messagebox.showinfo(
@@ -1827,6 +1941,7 @@ class TypingTrainerApp:
         daily_dates: List[date] = []
         daily_speed: List[float] = []
         daily_error: List[float] = []
+        daily_duration_minutes: List[float] = []
         if daily_stats:
             start_date = min(daily_stats)
             end_date = max(datetime.now().date(), start_date)
@@ -1842,19 +1957,25 @@ class TypingTrainerApp:
                         )
                     else:
                         daily_error.append(0.0)
+                    daily_duration_minutes.append(
+                        stats.get("duration_sum", 0.0) / 60.0
+                    )
                 else:
                     daily_speed.append(0.0)
                     daily_error.append(0.0)
+                    daily_duration_minutes.append(0.0)
                 current_day += timedelta(days=1)
 
         fig = plt.figure(figsize=(12, 10))
         self._configure_figure_window(fig)
-        grid_spec = fig.add_gridspec(3, 2, height_ratios=[1.0, 1.2, 1.0])
+        grid_spec = fig.add_gridspec(4, 2, height_ratios=[1.0, 1.2, 1.0, 0.8])
 
         ax_speed = fig.add_subplot(grid_spec[0, 0])
         ax_error = fig.add_subplot(grid_spec[0, 1])
         ax_3d = fig.add_subplot(grid_spec[1, :], projection="3d")
         ax_time = fig.add_subplot(grid_spec[2, :])
+        ax_time_spent = fig.add_subplot(grid_spec[3, :])
+        ax_time_spent_right = ax_time_spent.twinx()
 
         ax_speed.hist(letters_per_minute, bins="auto")
         ax_speed.set_title("Letters per minute distribution")
@@ -1964,30 +2085,75 @@ class TypingTrainerApp:
 
         if daily_dates:
             positions = np.arange(len(daily_dates))
-            bar_width = 0.4
+            bar_width = 0.25
             ax_time.bar(
-                positions - bar_width / 2.0,
+                positions - bar_width,
                 daily_speed,
                 width=bar_width,
                 color="#7ec8f8",
                 label="Average letters/min"
             )
             ax_time.bar(
-                positions + bar_width / 2.0,
+                positions,
                 daily_error,
                 width=bar_width,
                 color="#f7c59f",
                 label="Average error %"
             )
+            ax_time.bar(
+                positions + bar_width,
+                daily_duration_minutes,
+                width=bar_width,
+                color="#a5d6a7",
+                label="Total time (min)"
+            )
+            formatted_days = [day.strftime("%Y-%m-%d") for day in daily_dates]
             ax_time.set_xticks(positions)
             ax_time.set_xticklabels(
-                [day.strftime("%Y-%m-%d") for day in daily_dates],
+                formatted_days,
                 rotation=45,
                 ha="right"
             )
-            ax_time.set_ylabel("Daily average")
+            ax_time.set_ylabel("Daily averages / total time")
             ax_time.set_title("Daily averages (letters/min vs error %)")
             ax_time.legend()
+
+            cumulative_duration_minutes: List[float] = []
+            running_total = 0.0
+            for minutes in daily_duration_minutes:
+                running_total += minutes
+                cumulative_duration_minutes.append(running_total)
+
+            ax_time_spent.bar(
+                positions,
+                daily_duration_minutes,
+                width=0.4,
+                color="#bcd4e6",
+                label="Time per day (min)"
+            )
+            ax_time_spent_right.plot(
+                positions,
+                cumulative_duration_minutes,
+                color="#33658a",
+                marker="o",
+                label="Cumulative time (min)"
+            )
+            ax_time_spent.set_xticks(positions)
+            ax_time_spent.set_xticklabels(
+                formatted_days,
+                rotation=45,
+                ha="right"
+            )
+            ax_time_spent.set_ylabel("Daily time (min)")
+            ax_time_spent_right.set_ylabel("Cumulative time (min)")
+            ax_time_spent.set_title("Time spent per day")
+            handles, labels = ax_time_spent.get_legend_handles_labels()
+            handles2, labels2 = ax_time_spent_right.get_legend_handles_labels()
+            ax_time_spent.legend(
+                handles + handles2,
+                labels + labels2,
+                loc="upper left"
+            )
         else:
             ax_time.set_title("Daily averages (letters/min vs error %)")
             ax_time.text(
@@ -2000,6 +2166,21 @@ class TypingTrainerApp:
             )
             ax_time.set_xticks([])
             ax_time.set_yticks([])
+            ax_time_spent.set_title("Time spent per day")
+            ax_time_spent.text(
+                0.5,
+                0.5,
+                "No dated entries available",
+                ha="center",
+                va="center",
+                transform=ax_time_spent.transAxes
+            )
+            ax_time_spent.set_xticks([])
+            ax_time_spent.set_yticks([])
+            ax_time_spent_right.set_yticks([])
+        formatter = mticker.FormatStrFormatter("%.1f")
+        ax_time_spent.yaxis.set_major_formatter(formatter)
+        ax_time_spent_right.yaxis.set_major_formatter(formatter)
 
         plt.tight_layout()
         plt.show()
@@ -2041,6 +2222,12 @@ class TypingTrainerApp:
                     err_val = float(parts[2])
                 except ValueError:
                     continue
+                duration_val: float | None = None
+                if len(parts) >= 4:
+                    try:
+                        duration_val = float(parts[3])
+                    except ValueError:
+                        duration_val = None
                 digits_per_minute.append(dpm_val)
                 error_rates.append(err_val)
                 entry = daily_stats.setdefault(
@@ -2049,13 +2236,16 @@ class TypingTrainerApp:
                         "speed_sum": 0.0,
                         "speed_count": 0,
                         "error_sum": 0.0,
-                        "error_count": 0
+                        "error_count": 0,
+                        "duration_sum": 0.0,
                     }
                 )
                 entry["speed_sum"] += dpm_val
                 entry["speed_count"] += 1
                 entry["error_sum"] += err_val
                 entry["error_count"] += 1
+                if duration_val is not None:
+                    entry["duration_sum"] += max(duration_val, 0.0)
 
         if not digits_per_minute:
             messagebox.showinfo(
@@ -2067,6 +2257,7 @@ class TypingTrainerApp:
         daily_dates: List[date] = []
         daily_speed: List[float] = []
         daily_error: List[float] = []
+        daily_duration_minutes: List[float] = []
         if daily_stats:
             start_date = min(daily_stats)
             end_date = max(datetime.now().date(), start_date)
@@ -2082,19 +2273,25 @@ class TypingTrainerApp:
                         )
                     else:
                         daily_error.append(0.0)
+                    daily_duration_minutes.append(
+                        stats.get("duration_sum", 0.0) / 60.0
+                    )
                 else:
                     daily_speed.append(0.0)
                     daily_error.append(0.0)
+                    daily_duration_minutes.append(0.0)
                 current_day += timedelta(days=1)
 
         fig = plt.figure(figsize=(12, 10))
         self._configure_figure_window(fig)
-        grid_spec = fig.add_gridspec(3, 2, height_ratios=[1.0, 1.2, 1.0])
+        grid_spec = fig.add_gridspec(4, 2, height_ratios=[1.0, 1.2, 1.0, 0.8])
 
         ax_speed = fig.add_subplot(grid_spec[0, 0])
         ax_error = fig.add_subplot(grid_spec[0, 1])
         ax_3d = fig.add_subplot(grid_spec[1, :], projection="3d")
         ax_time = fig.add_subplot(grid_spec[2, :])
+        ax_time_spent = fig.add_subplot(grid_spec[3, :])
+        ax_time_spent_right = ax_time_spent.twinx()
 
         ax_speed.hist(digits_per_minute, bins="auto")
         ax_speed.set_title("Digits per minute distribution")
@@ -2204,30 +2401,75 @@ class TypingTrainerApp:
 
         if daily_dates:
             positions = np.arange(len(daily_dates))
-            bar_width = 0.4
+            bar_width = 0.25
             ax_time.bar(
-                positions - bar_width / 2.0,
+                positions - bar_width,
                 daily_speed,
                 width=bar_width,
                 color="#7ec8f8",
                 label="Average digits/min"
             )
             ax_time.bar(
-                positions + bar_width / 2.0,
+                positions,
                 daily_error,
                 width=bar_width,
                 color="#f7c59f",
                 label="Average error %"
             )
+            ax_time.bar(
+                positions + bar_width,
+                daily_duration_minutes,
+                width=bar_width,
+                color="#a5d6a7",
+                label="Total time (min)"
+            )
+            formatted_days = [day.strftime("%Y-%m-%d") for day in daily_dates]
             ax_time.set_xticks(positions)
             ax_time.set_xticklabels(
-                [day.strftime("%Y-%m-%d") for day in daily_dates],
+                formatted_days,
                 rotation=45,
                 ha="right"
             )
-            ax_time.set_ylabel("Daily average")
+            ax_time.set_ylabel("Daily averages / total time")
             ax_time.set_title("Daily averages (digits/min vs error %)")
             ax_time.legend()
+
+            cumulative_duration_minutes: List[float] = []
+            running_total = 0.0
+            for minutes in daily_duration_minutes:
+                running_total += minutes
+                cumulative_duration_minutes.append(running_total)
+
+            ax_time_spent.bar(
+                positions,
+                daily_duration_minutes,
+                width=0.4,
+                color="#bcd4e6",
+                label="Time per day (min)"
+            )
+            ax_time_spent_right.plot(
+                positions,
+                cumulative_duration_minutes,
+                color="#33658a",
+                marker="o",
+                label="Cumulative time (min)"
+            )
+            ax_time_spent.set_xticks(positions)
+            ax_time_spent.set_xticklabels(
+                formatted_days,
+                rotation=45,
+                ha="right"
+            )
+            ax_time_spent.set_ylabel("Daily time (min)")
+            ax_time_spent_right.set_ylabel("Cumulative time (min)")
+            ax_time_spent.set_title("Time spent per day")
+            handles, labels = ax_time_spent.get_legend_handles_labels()
+            handles2, labels2 = ax_time_spent_right.get_legend_handles_labels()
+            ax_time_spent.legend(
+                handles + handles2,
+                labels + labels2,
+                loc="upper left"
+            )
         else:
             ax_time.set_title("Daily averages (digits/min vs error %)")
             ax_time.text(
@@ -2240,6 +2482,21 @@ class TypingTrainerApp:
             )
             ax_time.set_xticks([])
             ax_time.set_yticks([])
+            ax_time_spent.set_title("Time spent per day")
+            ax_time_spent.text(
+                0.5,
+                0.5,
+                "No dated entries available",
+                ha="center",
+                va="center",
+                transform=ax_time_spent.transAxes
+            )
+            ax_time_spent.set_xticks([])
+            ax_time_spent.set_yticks([])
+            ax_time_spent_right.set_yticks([])
+        formatter = mticker.FormatStrFormatter("%.1f")
+        ax_time_spent.yaxis.set_major_formatter(formatter)
+        ax_time_spent_right.yaxis.set_major_formatter(formatter)
 
         plt.tight_layout()
         plt.show()
