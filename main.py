@@ -34,15 +34,30 @@ TEXT_FILE_NAME = "typing_texts.txt"
 STATS_FILE_NAME = "typing_stats.csv"
 LETTER_STATS_FILE_NAME = "letter_stats.csv"
 NUMBER_STATS_FILE_NAME = "number_stats.csv"
+TRAINING_FLAG_COLUMN = "is_training_run"
 STATS_FILE_HEADER = (
-    "timestamp;wpm;error_percentage;duration_seconds"
+    f"timestamp;wpm;error_percentage;duration_seconds;{TRAINING_FLAG_COLUMN}"
 )
 LETTER_STATS_FILE_HEADER = (
-    "timestamp;letters_per_minute;error_percentage;duration_seconds"
+    "timestamp;letters_per_minute;error_percentage;"
+    f"duration_seconds;{TRAINING_FLAG_COLUMN}"
 )
 NUMBER_STATS_FILE_HEADER = (
-    "timestamp;digits_per_minute;error_percentage;duration_seconds"
+    "timestamp;digits_per_minute;error_percentage;"
+    f"duration_seconds;{TRAINING_FLAG_COLUMN}"
 )
+STATS_FILTER_OPTIONS = [
+    ("regular_only", "Non-training runs"),
+    ("training_only", "Training runs"),
+    ("all_runs", "All runs"),
+]
+DEFAULT_STATS_FILTER_KEY = "regular_only"
+STATS_FILTER_LABEL_BY_KEY = {
+    key: label for key, label in STATS_FILTER_OPTIONS
+}
+STATS_FILTER_KEY_BY_LABEL = {
+    label: key for key, label in STATS_FILTER_OPTIONS
+}
 DEFAULT_FONT_FAMILY = "Courier New"
 DEFAULT_FONT_SIZE = 12
 MIN_FONT_SIZE = 6
@@ -261,6 +276,12 @@ class TypingTrainerApp:
         self.style = ttk.Style()
         self.dark_mode_enabled: bool = False
         self.dark_mode_var = tk.BooleanVar(master=self.master, value=False)
+        self.training_run_var = tk.BooleanVar(master=self.master, value=False)
+        default_filter_label = STATS_FILTER_LABEL_BY_KEY[DEFAULT_STATS_FILTER_KEY]
+        self.stats_filter_var = tk.StringVar(
+            master=self.master,
+            value=default_filter_label
+        )
 
         self._build_gui()
         self._schedule_generator_warmup()
@@ -430,9 +451,9 @@ class TypingTrainerApp:
 
         control_frame = ttk.Frame(right_frame)
         control_frame.grid(row=4, column=0, sticky="ew", pady=(8, 0))
-        for idx in range(7):
+        for idx in range(9):
             control_frame.columnconfigure(idx, weight=0)
-        control_frame.columnconfigure(7, weight=1)
+        control_frame.columnconfigure(8, weight=1)
 
         reset_button = ttk.Button(
             control_frame,
@@ -440,6 +461,13 @@ class TypingTrainerApp:
             command=self.reset_session
         )
         reset_button.grid(row=0, column=0, padx=(0, 5))
+
+        training_toggle = ttk.Checkbutton(
+            control_frame,
+            text="Training run",
+            variable=self.training_run_var
+        )
+        training_toggle.grid(row=0, column=1, padx=(0, 5))
 
         histogram_button = ttk.Button(
             control_frame,
@@ -476,6 +504,19 @@ class TypingTrainerApp:
         )
         number_stats_button.grid(row=0, column=6, padx=(5, 0))
 
+        stats_filter_label = ttk.Label(control_frame, text="Stats filter:")
+        stats_filter_label.grid(row=0, column=7, padx=(10, 0), sticky="e")
+
+        stats_filter_values = [label for _, label in STATS_FILTER_OPTIONS]
+        self.stats_filter_combobox = ttk.Combobox(
+            control_frame,
+            textvariable=self.stats_filter_var,
+            values=stats_filter_values,
+            state="readonly",
+            width=18
+        )
+        self.stats_filter_combobox.grid(row=0, column=8, padx=(5, 0), sticky="ew")
+
         # Initialize shared font for both text widgets
         self.text_font = tkfont.Font(
             family=DEFAULT_FONT_FAMILY,
@@ -484,6 +525,34 @@ class TypingTrainerApp:
         self.display_text.configure(font=self.text_font)
         self.input_text.configure(font=self.text_font)
         self._apply_theme()
+
+    def _get_stats_filter_key(self) -> str:
+        """
+        Return the internal key of the currently selected statistics filter.
+        """
+        label = self.stats_filter_var.get()
+        return STATS_FILTER_KEY_BY_LABEL.get(label, DEFAULT_STATS_FILTER_KEY)
+
+    def _should_include_training_entry(self, is_training_run: bool) -> bool:
+        """
+        Determine whether the given entry should be used based on the filter.
+        """
+        filter_key = self._get_stats_filter_key()
+        if filter_key == "training_only":
+            return is_training_run
+        if filter_key == "regular_only":
+            return not is_training_run
+        return True
+
+    @staticmethod
+    def _parse_training_flag(parts: List[str], flag_index: int) -> bool:
+        """
+        Safely parse the training flag from a CSV row.
+        """
+        if len(parts) <= flag_index:
+            return False
+        value = parts[flag_index].strip().lower()
+        return value in {"1", "true", "yes", "y"}
 
 
     def _set_info_text(self, text: str) -> None:
@@ -1160,7 +1229,8 @@ class TypingTrainerApp:
         self.save_letter_result(
             letters_per_minute,
             error_percentage,
-            elapsed_seconds
+            elapsed_seconds,
+            self.training_run_var.get()
         )
 
         self.display_text.configure(state="normal")
@@ -1352,7 +1422,8 @@ class TypingTrainerApp:
         self.save_number_result(
             digits_per_minute,
             error_percentage,
-            elapsed_seconds
+            elapsed_seconds,
+            self.training_run_var.get()
         )
 
         self.display_text.configure(state="normal")
@@ -1592,24 +1663,32 @@ class TypingTrainerApp:
         else:
             error_percentage = (errors / total) * 100.0
 
-        self.save_wpm_result(wpm, error_percentage, elapsed_seconds)
+        self.save_wpm_result(
+            wpm,
+            error_percentage,
+            elapsed_seconds,
+            self.training_run_var.get()
+        )
 
 
     def save_wpm_result(
         self,
         wpm: float,
         error_percentage: float,
-        duration_seconds: float
+        duration_seconds: float,
+        is_training_run: bool
     ) -> None:
         """
         Append the given WPM value and error rate to the statistics file.
 
-        The values are appended as a simple CSV with four columns:
-        timestamp;WPM;error_rate;duration_seconds.
+        The values are appended as a simple CSV that also stores whether the
+        session was marked as a training run.
         """
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        training_flag = "1" if is_training_run else "0"
         line = (
-            f"{timestamp};{wpm:.3f};{error_percentage:.3f};{duration_seconds:.3f}\n"
+            f"{timestamp};{wpm:.3f};{error_percentage:.3f};"
+            f"{duration_seconds:.3f};{training_flag}\n"
         )
         ensure_stats_file_header(self.stats_file_path, STATS_FILE_HEADER)
         with self.stats_file_path.open("a", encoding="utf-8") as stats_file:
@@ -1620,15 +1699,18 @@ class TypingTrainerApp:
         self,
         letters_per_minute: float,
         error_percentage: float,
-        duration_seconds: float
+        duration_seconds: float,
+        is_training_run: bool
     ) -> None:
         """
         Append the letter mode statistics to the dedicated CSV file.
         """
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        training_flag = "1" if is_training_run else "0"
         line = (
             f"{timestamp};{letters_per_minute:.3f};"
-            f"{error_percentage:.3f};{duration_seconds:.3f}\n"
+            f"{error_percentage:.3f};{duration_seconds:.3f};"
+            f"{training_flag}\n"
         )
         ensure_stats_file_header(
             self.letter_stats_file_path,
@@ -1642,15 +1724,18 @@ class TypingTrainerApp:
         self,
         digits_per_minute: float,
         error_percentage: float,
-        duration_seconds: float
+        duration_seconds: float,
+        is_training_run: bool
     ) -> None:
         """
         Append the number mode statistics to the dedicated CSV file.
         """
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        training_flag = "1" if is_training_run else "0"
         line = (
             f"{timestamp};{digits_per_minute:.3f};"
-            f"{error_percentage:.3f};{duration_seconds:.3f}\n"
+            f"{error_percentage:.3f};{duration_seconds:.3f};"
+            f"{training_flag}\n"
         )
         ensure_stats_file_header(
             self.number_stats_file_path,
@@ -1726,6 +1811,9 @@ class TypingTrainerApp:
                 parts = line.split(";")
                 if len(parts) < 2:
                     continue
+                is_training_run = self._parse_training_flag(parts, 4)
+                if not self._should_include_training_entry(is_training_run):
+                    continue
 
                 try:
                     day = datetime.strptime(parts[0], "%Y-%m-%d %H:%M:%S").date()
@@ -1778,7 +1866,7 @@ class TypingTrainerApp:
         if not wpm_values:
             messagebox.showinfo(
                 "Statistics",
-                "No valid WPM data available in the statistics file.",
+                "No statistics available for the current filter selection.",
             )
             return
 
@@ -2061,6 +2149,9 @@ class TypingTrainerApp:
                 parts = line.strip().split(";")
                 if len(parts) < 3:
                     continue
+                is_training_run = self._parse_training_flag(parts, 4)
+                if not self._should_include_training_entry(is_training_run):
+                    continue
                 try:
                     day = datetime.strptime(
                         parts[0],
@@ -2098,7 +2189,7 @@ class TypingTrainerApp:
         if not letters_per_minute:
             messagebox.showinfo(
                 "Letter statistics",
-                "No valid data inside the letter statistics file."
+                "No statistics available for the current filter selection."
             )
             return
 
@@ -2377,6 +2468,9 @@ class TypingTrainerApp:
                 parts = line.strip().split(";")
                 if len(parts) < 3:
                     continue
+                is_training_run = self._parse_training_flag(parts, 4)
+                if not self._should_include_training_entry(is_training_run):
+                    continue
                 try:
                     day = datetime.strptime(
                         parts[0],
@@ -2414,7 +2508,7 @@ class TypingTrainerApp:
         if not digits_per_minute:
             messagebox.showinfo(
                 "Number statistics",
-                "No valid data inside the number statistics file."
+                "No statistics available for the current filter selection."
             )
             return
 
