@@ -46,6 +46,21 @@ NUMBER_STATS_FILE_HEADER = (
     "timestamp;digits_per_minute;error_percentage;"
     f"duration_seconds;{TRAINING_FLAG_COLUMN}"
 )
+SUDDEN_DEATH_TYPING_STATS_FILE_NAME = "sudden_death_typing_stats.csv"
+SUDDEN_DEATH_LETTER_STATS_FILE_NAME = "sudden_death_letter_stats.csv"
+SUDDEN_DEATH_NUMBER_STATS_FILE_NAME = "sudden_death_number_stats.csv"
+SUDDEN_DEATH_TYPING_STATS_FILE_HEADER = (
+    "timestamp;wpm;correct_characters;duration_seconds;"
+    f"completed;{TRAINING_FLAG_COLUMN}"
+)
+SUDDEN_DEATH_LETTER_STATS_FILE_HEADER = (
+    "timestamp;letters_per_minute;correct_letters;duration_seconds;"
+    f"completed;{TRAINING_FLAG_COLUMN}"
+)
+SUDDEN_DEATH_NUMBER_STATS_FILE_HEADER = (
+    "timestamp;digits_per_minute;correct_digits;duration_seconds;"
+    f"completed;{TRAINING_FLAG_COLUMN}"
+)
 STATS_FILTER_OPTIONS = [
     ("regular_only", "Non-training runs"),
     ("training_only", "Training runs"),
@@ -251,6 +266,15 @@ class TypingTrainerApp:
         self.stats_file_path: Path = get__file_path(STATS_FILE_NAME)
         self.letter_stats_file_path: Path = get__file_path(LETTER_STATS_FILE_NAME)
         self.number_stats_file_path: Path = get__file_path(NUMBER_STATS_FILE_NAME)
+        self.sudden_death_typing_stats_file_path: Path = get__file_path(
+            SUDDEN_DEATH_TYPING_STATS_FILE_NAME
+        )
+        self.sudden_death_letter_stats_file_path: Path = get__file_path(
+            SUDDEN_DEATH_LETTER_STATS_FILE_NAME
+        )
+        self.sudden_death_number_stats_file_path: Path = get__file_path(
+            SUDDEN_DEATH_NUMBER_STATS_FILE_NAME
+        )
 
         self.current_font_size: int = DEFAULT_FONT_SIZE
         self.text_font: tkfont.Font | None = None
@@ -276,12 +300,14 @@ class TypingTrainerApp:
         self.style = ttk.Style()
         self.dark_mode_enabled: bool = False
         self.dark_mode_var = tk.BooleanVar(master=self.master, value=False)
+        self.sudden_death_var = tk.BooleanVar(master=self.master, value=False)
         self.training_run_var = tk.BooleanVar(master=self.master, value=False)
         default_filter_label = STATS_FILTER_LABEL_BY_KEY[DEFAULT_STATS_FILTER_KEY]
         self.stats_filter_var = tk.StringVar(
             master=self.master,
             value=default_filter_label
         )
+        self.sudden_death_failure_triggered: bool = False
 
         self._build_gui()
         self._schedule_generator_warmup()
@@ -362,6 +388,7 @@ class TypingTrainerApp:
         top_right_frame.columnconfigure(2, weight=0)
         top_right_frame.columnconfigure(3, weight=0)
         top_right_frame.columnconfigure(4, weight=0)
+        top_right_frame.columnconfigure(5, weight=0)
 
         self.info_label = ttk.Label(
             top_right_frame,
@@ -400,6 +427,13 @@ class TypingTrainerApp:
             command=self.toggle_dark_mode
         )
         self.dark_mode_toggle.grid(row=0, column=4, padx=(10, 0), sticky="e")
+        self.sudden_death_toggle = ttk.Checkbutton(
+            top_right_frame,
+            text="Sudden death",
+            variable=self.sudden_death_var,
+            command=self.on_sudden_death_toggle
+        )
+        self.sudden_death_toggle.grid(row=0, column=5, padx=(10, 0), sticky="e")
 
         self.wpm_label = ttk.Label(
             right_frame,
@@ -635,6 +669,27 @@ class TypingTrainerApp:
         """
         self.dark_mode_enabled = bool(self.dark_mode_var.get())
         self._apply_theme()
+
+    def is_sudden_death_active(self) -> bool:
+        """
+        Return True if the sudden death toggle is enabled.
+        """
+        return bool(self.sudden_death_var.get())
+
+    def on_sudden_death_toggle(self) -> None:
+        """
+        React to sudden death activation by resetting the current session.
+        """
+        enabled = self.is_sudden_death_active()
+        self.reset_session(clear_display=False)
+        if enabled:
+            self.info_label.configure(
+                text="Sudden death enabled. Load a text or start a mode."
+            )
+        else:
+            self.info_label.configure(
+                text="Sudden death disabled. Normal sessions restored."
+            )
 
     def _apply_theme(self) -> None:
         """
@@ -1042,6 +1097,7 @@ class TypingTrainerApp:
         self.error_count = 0
         self.correct_count = 0
         self.previous_text = ""
+        self.sudden_death_failure_triggered = False
         self.letter_errors = 0
         self.letter_correct_letters = 0
         self.letter_previous_text = ""
@@ -1142,15 +1198,20 @@ class TypingTrainerApp:
             self.letter_index += 1
             self.input_text.delete("1.0", tk.END)
             if self.letter_index >= self.letter_total_letters:
-                self.finish_letter_mode_session()
+                self.finish_letter_mode_session(
+                    sudden_death=self.is_sudden_death_active()
+                )
             else:
                 self._update_letter_display()
                 self.update_letter_status_label()
             return
 
         self.letter_errors += 1
-        self.input_text.delete("1.0", tk.END)
-        self.update_letter_status_label()
+        if self.is_sudden_death_active():
+            self.finish_letter_mode_session(sudden_death=True)
+        else:
+            self.input_text.delete("1.0", tk.END)
+            self.update_letter_status_label()
 
 
     def _update_letter_display(self) -> None:
@@ -1208,7 +1269,7 @@ class TypingTrainerApp:
         )
 
 
-    def finish_letter_mode_session(self) -> None:
+    def finish_letter_mode_session(self, sudden_death: bool = False) -> None:
         """
         Finalize the letter mode session and store statistics.
         """
@@ -1223,36 +1284,72 @@ class TypingTrainerApp:
             if elapsed_minutes > 0.0:
                 letters_per_minute = self.letter_correct_letters / elapsed_minutes
 
-        total_letters = max(self.letter_total_letters, 1)
-        error_percentage = (self.letter_errors / total_letters) * 100.0
+        completed_sequence = self.letter_index >= self.letter_total_letters
 
-        self.save_letter_result(
-            letters_per_minute,
-            error_percentage,
-            elapsed_seconds,
-            self.training_run_var.get()
-        )
-
-        self.display_text.configure(state="normal")
-        self.display_text.delete("1.0", tk.END)
-        self.display_text.insert(
-            "1.0",
-            "Letter mode finished. Click 'Letter mode' to start again."
-        )
-        self.display_text.configure(state="disabled")
-
-        self.info_label.configure(
-            text="Letter mode finished. Start a new run via the Letter mode button."
-        )
-
-        self.wpm_label.configure(
-            text=(
+        if sudden_death:
+            correct_letters = self.letter_correct_letters
+            self.save_sudden_death_letter_result(
+                letters_per_minute,
+                correct_letters,
+                elapsed_seconds,
+                completed=completed_sequence,
+                is_training_run=self.training_run_var.get()
+            )
+            if completed_sequence:
+                display_message = (
+                    "Sudden death letter mode complete. "
+                    "Click 'Letter mode' to start again."
+                )
+                info_message = (
+                    "Sudden death letter mode complete. Start a new run to continue."
+                )
+                summary = (
+                    f"Sudden death letter complete  |  Time: {elapsed_seconds:.1f} s  |  "
+                    f"Letters/min: {letters_per_minute:.1f}  |  "
+                    f"Correct letters: {correct_letters}"
+                )
+            else:
+                display_message = (
+                    f"Sudden death failed after {correct_letters} letters. "
+                    "Click 'Letter mode' to try again."
+                )
+                info_message = (
+                    "Sudden death letter mode failed. Start a new run to retry."
+                )
+                summary = (
+                    f"Sudden death letter failed  |  Time: {elapsed_seconds:.1f} s  |  "
+                    f"Letters/min: {letters_per_minute:.1f}  |  "
+                    f"Correct letters: {correct_letters}"
+                )
+        else:
+            total_letters = max(self.letter_total_letters, 1)
+            error_percentage = (self.letter_errors / total_letters) * 100.0
+            self.save_letter_result(
+                letters_per_minute,
+                error_percentage,
+                elapsed_seconds,
+                self.training_run_var.get()
+            )
+            display_message = (
+                "Letter mode finished. Click 'Letter mode' to start again."
+            )
+            info_message = (
+                "Letter mode finished. Start a new run via the Letter mode button."
+            )
+            summary = (
                 f"Letter mode complete  |  Time: {elapsed_seconds:.1f} s  |  "
                 f"Letters/min: {letters_per_minute:.1f}  |  "
                 f"Errors: {self.letter_errors}  |  "
                 f"Error %: {error_percentage:.1f}"
             )
-        )
+
+        self.display_text.configure(state="normal")
+        self.display_text.delete("1.0", tk.END)
+        self.display_text.insert("1.0", display_message)
+        self.display_text.configure(state="disabled")
+
+        self.info_label.configure(text=info_message)
+        self.wpm_label.configure(text=summary)
 
         self.input_text.delete("1.0", tk.END)
         self.is_letter_mode = False
@@ -1336,15 +1433,20 @@ class TypingTrainerApp:
             self.number_index += 1
             self.input_text.delete("1.0", tk.END)
             if self.number_index >= self.number_total_digits:
-                self.finish_number_mode_session()
+                self.finish_number_mode_session(
+                    sudden_death=self.is_sudden_death_active()
+                )
             else:
                 self._update_number_display()
                 self.update_number_status_label()
             return
 
         self.number_errors += 1
-        self.input_text.delete("1.0", tk.END)
-        self.update_number_status_label()
+        if self.is_sudden_death_active():
+            self.finish_number_mode_session(sudden_death=True)
+        else:
+            self.input_text.delete("1.0", tk.END)
+            self.update_number_status_label()
 
 
     def _update_number_display(self) -> None:
@@ -1401,7 +1503,7 @@ class TypingTrainerApp:
         )
 
 
-    def finish_number_mode_session(self) -> None:
+    def finish_number_mode_session(self, sudden_death: bool = False) -> None:
         """
         Finalize the number mode session and store statistics.
         """
@@ -1416,36 +1518,72 @@ class TypingTrainerApp:
             if elapsed_minutes > 0.0:
                 digits_per_minute = self.number_correct_digits / elapsed_minutes
 
-        total_digits = max(self.number_total_digits, 1)
-        error_percentage = (self.number_errors / total_digits) * 100.0
+        completed_sequence = self.number_index >= self.number_total_digits
 
-        self.save_number_result(
-            digits_per_minute,
-            error_percentage,
-            elapsed_seconds,
-            self.training_run_var.get()
-        )
-
-        self.display_text.configure(state="normal")
-        self.display_text.delete("1.0", tk.END)
-        self.display_text.insert(
-            "1.0",
-            "Number mode finished. Click 'Number mode' to start again."
-        )
-        self.display_text.configure(state="disabled")
-
-        self.info_label.configure(
-            text="Number mode finished. Start a new run via the Number mode button."
-        )
-
-        self.wpm_label.configure(
-            text=(
+        if sudden_death:
+            correct_digits = self.number_correct_digits
+            self.save_sudden_death_number_result(
+                digits_per_minute,
+                correct_digits,
+                elapsed_seconds,
+                completed=completed_sequence,
+                is_training_run=self.training_run_var.get()
+            )
+            if completed_sequence:
+                display_message = (
+                    "Sudden death number mode complete. "
+                    "Click 'Number mode' to start again."
+                )
+                info_message = (
+                    "Sudden death number mode complete. Start a new run to continue."
+                )
+                summary = (
+                    f"Sudden death number complete  |  Time: {elapsed_seconds:.1f} s  |  "
+                    f"Digits/min: {digits_per_minute:.1f}  |  "
+                    f"Correct digits: {correct_digits}"
+                )
+            else:
+                display_message = (
+                    f"Sudden death failed after {correct_digits} digits. "
+                    "Click 'Number mode' to try again."
+                )
+                info_message = (
+                    "Sudden death number mode failed. Start a new run to retry."
+                )
+                summary = (
+                    f"Sudden death number failed  |  Time: {elapsed_seconds:.1f} s  |  "
+                    f"Digits/min: {digits_per_minute:.1f}  |  "
+                    f"Correct digits: {correct_digits}"
+                )
+        else:
+            total_digits = max(self.number_total_digits, 1)
+            error_percentage = (self.number_errors / total_digits) * 100.0
+            self.save_number_result(
+                digits_per_minute,
+                error_percentage,
+                elapsed_seconds,
+                self.training_run_var.get()
+            )
+            display_message = (
+                "Number mode finished. Click 'Number mode' to start again."
+            )
+            info_message = (
+                "Number mode finished. Start a new run via the Number mode button."
+            )
+            summary = (
                 f"Number mode complete  |  Time: {elapsed_seconds:.1f} s  |  "
                 f"Digits/min: {digits_per_minute:.1f}  |  "
                 f"Errors: {self.number_errors}  |  "
                 f"Error %: {error_percentage:.1f}"
             )
-        )
+
+        self.display_text.configure(state="normal")
+        self.display_text.delete("1.0", tk.END)
+        self.display_text.insert("1.0", display_message)
+        self.display_text.configure(state="disabled")
+
+        self.info_label.configure(text=info_message)
+        self.wpm_label.configure(text=summary)
 
         self.input_text.delete("1.0", tk.END)
         self.is_number_mode = False
@@ -1518,7 +1656,14 @@ class TypingTrainerApp:
         self._update_error_counter(self.previous_text, typed_text)
 
         # Then update current error highlighting and correct-count.
-        self.highlight_errors(typed_text)
+        first_error_index = self.highlight_errors(typed_text)
+
+        if (
+            self.is_sudden_death_active()
+            and first_error_index is not None
+        ):
+            self.handle_sudden_death_text_failure(first_error_index)
+            return
 
         # Update statistics row and check for completion.
         self.update_wpm(typed_text)
@@ -1569,7 +1714,7 @@ class TypingTrainerApp:
                 self.error_count += 1
 
 
-    def highlight_errors(self, typed_text: str) -> None:
+    def highlight_errors(self, typed_text: str) -> int | None:
         """
         Highlight incorrect characters in the input text.
 
@@ -1581,22 +1726,76 @@ class TypingTrainerApp:
         self.input_text.tag_remove("error", "1.0", tk.END)
 
         correct = 0
+        first_error_index: int | None = None
 
         for index, char in enumerate(typed_text):
             if index >= len(self.target_text):
                 start = f"1.0 + {index} chars"
                 end = f"1.0 + {index + 1} chars"
                 self.input_text.tag_add("error", start, end)
+                if first_error_index is None:
+                    first_error_index = index
                 continue
 
             if char != self.target_text[index]:
                 start = f"1.0 + {index} chars"
                 end = f"1.0 + {index + 1} chars"
                 self.input_text.tag_add("error", start, end)
+                if first_error_index is None:
+                    first_error_index = index
             else:
                 correct += 1
 
         self.correct_count = correct
+        return first_error_index
+
+    def handle_sudden_death_text_failure(self, failure_index: int) -> None:
+        """
+        Finalize a typing session when sudden death detects a mistake.
+        """
+        if self.finished or self.sudden_death_failure_triggered:
+            return
+
+        self.sudden_death_failure_triggered = True
+        self.finished = True
+
+        if self.update_job_id is not None:
+            self.master.after_cancel(self.update_job_id)
+            self.update_job_id = None
+
+        safe_index = max(0, min(failure_index, len(self.target_text)))
+        elapsed_seconds = 0.0
+        wpm = 0.0
+        if self.start_time is not None:
+            elapsed_seconds = max(time.time() - self.start_time, 0.0001)
+            elapsed_minutes = elapsed_seconds / 60.0
+            correct_segment = self.target_text[:safe_index]
+            words = len(correct_segment.split())
+            if elapsed_minutes > 0.0:
+                wpm = words / elapsed_minutes
+        else:
+            correct_segment = self.target_text[:safe_index]
+
+        self.save_sudden_death_wpm_result(
+            wpm,
+            safe_index,
+            elapsed_seconds,
+            completed=False,
+            is_training_run=self.training_run_var.get()
+        )
+
+        self.info_label.configure(
+            text=(
+                f"Sudden death failed after {safe_index} characters. "
+                "Load a text to try again."
+            )
+        )
+        self.wpm_label.configure(
+            text=(
+                f"Sudden death  |  Time: {elapsed_seconds:.1f} s  |  "
+                f"Correct chars: {safe_index}  |  WPM: {wpm:.1f}"
+            )
+        )
 
 
     def update_wpm(self, typed_text: str) -> None:
@@ -1663,12 +1862,30 @@ class TypingTrainerApp:
         else:
             error_percentage = (errors / total) * 100.0
 
-        self.save_wpm_result(
-            wpm,
-            error_percentage,
-            elapsed_seconds,
-            self.training_run_var.get()
-        )
+        if self.is_sudden_death_active():
+            self.save_sudden_death_wpm_result(
+                wpm,
+                len(self.target_text),
+                elapsed_seconds,
+                completed=True,
+                is_training_run=self.training_run_var.get()
+            )
+            self.info_label.configure(
+                text="Sudden death complete. Start another run when ready."
+            )
+            self.wpm_label.configure(
+                text=(
+                    f"Sudden death  |  Time: {elapsed_seconds:.1f} s  |  "
+                    f"WPM: {wpm:.1f}  |  Correct chars: {len(self.target_text)}"
+                )
+            )
+        else:
+            self.save_wpm_result(
+                wpm,
+                error_percentage,
+                elapsed_seconds,
+                self.training_run_var.get()
+            )
 
 
     def save_wpm_result(
@@ -1692,6 +1909,34 @@ class TypingTrainerApp:
         )
         ensure_stats_file_header(self.stats_file_path, STATS_FILE_HEADER)
         with self.stats_file_path.open("a", encoding="utf-8") as stats_file:
+            stats_file.write(line)
+
+    def save_sudden_death_wpm_result(
+        self,
+        wpm: float,
+        correct_characters: int,
+        duration_seconds: float,
+        completed: bool,
+        is_training_run: bool
+    ) -> None:
+        """
+        Store sudden death typing results with the number of correct characters.
+        """
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        completed_flag = "1" if completed else "0"
+        training_flag = "1" if is_training_run else "0"
+        line = (
+            f"{timestamp};{wpm:.3f};{correct_characters};"
+            f"{duration_seconds:.3f};{completed_flag};{training_flag}\n"
+        )
+        ensure_stats_file_header(
+            self.sudden_death_typing_stats_file_path,
+            SUDDEN_DEATH_TYPING_STATS_FILE_HEADER
+        )
+        with self.sudden_death_typing_stats_file_path.open(
+            "a",
+            encoding="utf-8"
+        ) as stats_file:
             stats_file.write(line)
 
 
@@ -1719,6 +1964,34 @@ class TypingTrainerApp:
         with self.letter_stats_file_path.open("a", encoding="utf-8") as file:
             file.write(line)
 
+    def save_sudden_death_letter_result(
+        self,
+        letters_per_minute: float,
+        correct_letters: int,
+        duration_seconds: float,
+        completed: bool,
+        is_training_run: bool
+    ) -> None:
+        """
+        Store sudden death letter mode results.
+        """
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        completed_flag = "1" if completed else "0"
+        training_flag = "1" if is_training_run else "0"
+        line = (
+            f"{timestamp};{letters_per_minute:.3f};{correct_letters};"
+            f"{duration_seconds:.3f};{completed_flag};{training_flag}\n"
+        )
+        ensure_stats_file_header(
+            self.sudden_death_letter_stats_file_path,
+            SUDDEN_DEATH_LETTER_STATS_FILE_HEADER
+        )
+        with self.sudden_death_letter_stats_file_path.open(
+            "a",
+            encoding="utf-8"
+        ) as file:
+            file.write(line)
+
 
     def save_number_result(
         self,
@@ -1742,6 +2015,34 @@ class TypingTrainerApp:
             NUMBER_STATS_FILE_HEADER
         )
         with self.number_stats_file_path.open("a", encoding="utf-8") as file:
+            file.write(line)
+
+    def save_sudden_death_number_result(
+        self,
+        digits_per_minute: float,
+        correct_digits: int,
+        duration_seconds: float,
+        completed: bool,
+        is_training_run: bool
+    ) -> None:
+        """
+        Store sudden death number mode results.
+        """
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        completed_flag = "1" if completed else "0"
+        training_flag = "1" if is_training_run else "0"
+        line = (
+            f"{timestamp};{digits_per_minute:.3f};{correct_digits};"
+            f"{duration_seconds:.3f};{completed_flag};{training_flag}\n"
+        )
+        ensure_stats_file_header(
+            self.sudden_death_number_stats_file_path,
+            SUDDEN_DEATH_NUMBER_STATS_FILE_HEADER
+        )
+        with self.sudden_death_number_stats_file_path.open(
+            "a",
+            encoding="utf-8"
+        ) as file:
             file.write(line)
 
 
@@ -1774,6 +2075,335 @@ class TypingTrainerApp:
         )
         messagebox.showinfo("Result", message)
 
+    def _show_sudden_death_stats(
+        self,
+        *,
+        file_path: Path,
+        header: str,
+        mode_label: str,
+        speed_label: str,
+        speed_short_label: str,
+        correct_label: str
+    ) -> None:
+        """
+        Shared visualization helper for sudden death statistics across modes.
+        """
+        title = f"Sudden death {mode_label} statistics"
+        if not file_path.exists():
+            messagebox.showinfo(
+                title,
+                f"No sudden death {mode_label} statistics available yet. "
+                "Finish at least one sudden death run."
+            )
+            return
+
+        ensure_stats_file_header(
+            file_path,
+            header,
+            create_if_missing=False
+        )
+
+        speed_values: List[float] = []
+        correct_counts: List[float] = []
+        daily_stats: dict = {}
+
+        with file_path.open("r", encoding="utf-8") as file:
+            for line in file:
+                parts = line.strip().split(";")
+                if len(parts) < 6:
+                    continue
+                is_training_run = self._parse_training_flag(parts, 5)
+                if not self._should_include_training_entry(is_training_run):
+                    continue
+                try:
+                    speed_val = float(parts[1])
+                    correct_val = float(parts[2])
+                except ValueError:
+                    continue
+                try:
+                    day = datetime.strptime(
+                        parts[0],
+                        "%Y-%m-%d %H:%M:%S"
+                    ).date()
+                except ValueError:
+                    day = None
+                duration_val: float | None = None
+                if len(parts) >= 4:
+                    try:
+                        duration_val = float(parts[3])
+                    except ValueError:
+                        duration_val = None
+
+                speed_values.append(speed_val)
+                correct_counts.append(correct_val)
+                if day is not None:
+                    entry = daily_stats.setdefault(
+                        day,
+                        {
+                            "speed_sum": 0.0,
+                            "speed_count": 0,
+                            "correct_sum": 0.0,
+                            "correct_count": 0,
+                            "duration_sum": 0.0,
+                        }
+                    )
+                    entry["speed_sum"] += speed_val
+                    entry["speed_count"] += 1
+                    entry["correct_sum"] += correct_val
+                    entry["correct_count"] += 1
+                    if duration_val is not None:
+                        entry["duration_sum"] += max(duration_val, 0.0)
+
+        if not speed_values:
+            messagebox.showinfo(
+                title,
+                "No statistics available for the current filter selection."
+            )
+            return
+
+        daily_dates: List[date] = []
+        daily_speed: List[float] = []
+        daily_correct: List[float] = []
+        daily_duration_minutes: List[float] = []
+        if daily_stats:
+            start_date = min(daily_stats)
+            end_date = max(datetime.now().date(), start_date)
+            current_day = start_date
+            while current_day <= end_date:
+                daily_dates.append(current_day)
+                stats = daily_stats.get(current_day)
+                if stats:
+                    daily_speed.append(stats["speed_sum"] / stats["speed_count"])
+                    daily_correct.append(
+                        stats["correct_sum"] / stats["correct_count"]
+                    )
+                    daily_duration_minutes.append(
+                        stats.get("duration_sum", 0.0) / 60.0
+                    )
+                else:
+                    daily_speed.append(0.0)
+                    daily_correct.append(0.0)
+                    daily_duration_minutes.append(0.0)
+                current_day += timedelta(days=1)
+
+        fig = plt.figure(figsize=(12, 10))
+        self._configure_figure_window(fig)
+        grid_spec = fig.add_gridspec(4, 2, height_ratios=[1.0, 1.2, 1.0, 0.8])
+
+        ax_speed = fig.add_subplot(grid_spec[0, 0])
+        ax_correct = fig.add_subplot(grid_spec[0, 1])
+        ax_3d = fig.add_subplot(grid_spec[1, :], projection="3d")
+        ax_time = fig.add_subplot(grid_spec[2, :])
+        ax_time_spent = fig.add_subplot(grid_spec[3, :])
+        ax_time_spent_right = ax_time_spent.twinx()
+
+        ax_speed.hist(speed_values, bins="auto")
+        ax_speed.set_title(f"{speed_label} distribution")
+        ax_speed.set_xlabel(speed_label)
+        ax_speed.set_ylabel("Frequency")
+
+        if correct_counts:
+            ax_correct.hist(correct_counts, bins="auto")
+            ax_correct.set_title(f"{correct_label} distribution")
+            ax_correct.set_xlabel(correct_label)
+            ax_correct.set_ylabel("Frequency")
+        else:
+            ax_correct.set_title(f"{correct_label} distribution")
+            ax_correct.text(
+                0.5,
+                0.5,
+                "No data available",
+                ha="center",
+                va="center",
+                transform=ax_correct.transAxes
+            )
+            ax_correct.set_xticks([])
+            ax_correct.set_yticks([])
+
+        if speed_values and correct_counts:
+            speed_arr = np.asarray(speed_values, dtype=float)
+            correct_arr = np.asarray(correct_counts, dtype=float)
+            x_edges = np.histogram_bin_edges(speed_arr, bins="auto")
+            y_edges = np.histogram_bin_edges(correct_arr, bins="auto")
+            hist, xedges, yedges = np.histogram2d(
+                speed_arr,
+                correct_arr,
+                bins=[x_edges, y_edges]
+            )
+            x_positions = xedges[:-1]
+            y_positions = yedges[:-1]
+            x_sizes = np.diff(xedges)
+            y_sizes = np.diff(yedges)
+            xpos, ypos = np.meshgrid(
+                x_positions,
+                y_positions,
+                indexing="ij"
+            )
+            dx, dy = np.meshgrid(
+                x_sizes,
+                y_sizes,
+                indexing="ij"
+            )
+            xpos = xpos.ravel()
+            ypos = ypos.ravel()
+            dx = dx.ravel()
+            dy = dy.ravel()
+            dz = hist.ravel()
+            nonzero = dz > 0
+            xpos = xpos[nonzero]
+            ypos = ypos[nonzero]
+            dx = dx[nonzero]
+            dy = dy[nonzero]
+            dz = dz[nonzero]
+            if dz.size > 0:
+                ax_3d.bar3d(
+                    xpos,
+                    ypos,
+                    np.zeros_like(dz),
+                    dx,
+                    dy,
+                    dz,
+                    shade=True
+                )
+            else:
+                ax_3d.text(
+                    0.5,
+                    0.5,
+                    0.5,
+                    "No combined data available",
+                    ha="center",
+                    va="center"
+                )
+                ax_3d.set_xticks([])
+                ax_3d.set_yticks([])
+                ax_3d.set_zticks([])
+        else:
+            ax_3d.text(
+                0.5,
+                0.5,
+                0.5,
+                "No combined data available",
+                ha="center",
+                va="center"
+            )
+            ax_3d.set_xticks([])
+            ax_3d.set_yticks([])
+            ax_3d.set_zticks([])
+
+        ax_3d.set_title(
+            f"Joint {speed_short_label} / {correct_label.lower()} distribution"
+        )
+        ax_3d.set_xlabel(speed_short_label)
+        ax_3d.set_ylabel(correct_label)
+        ax_3d.set_zlabel("Count")
+
+        if daily_dates:
+            positions = np.arange(len(daily_dates))
+            bar_width = 0.25
+            ax_time.bar(
+                positions - bar_width,
+                daily_speed,
+                width=bar_width,
+                color="#7ec8f8",
+                label=f"Average {speed_short_label}"
+            )
+            ax_time.bar(
+                positions,
+                daily_correct,
+                width=bar_width,
+                color="#f7c59f",
+                label=f"Average {correct_label.lower()}"
+            )
+            ax_time.bar(
+                positions + bar_width,
+                daily_duration_minutes,
+                width=bar_width,
+                color="#a5d6a7",
+                label="Total time (min)"
+            )
+            formatted_days = [day.strftime("%Y-%m-%d") for day in daily_dates]
+            ax_time.set_xticks(positions)
+            ax_time.set_xticklabels(
+                formatted_days,
+                rotation=45,
+                ha="right"
+            )
+            ax_time.set_ylabel("Daily averages / total time")
+            ax_time.set_title(
+                f"Daily averages ({speed_short_label} vs {correct_label.lower()})"
+            )
+            ax_time.legend()
+
+            cumulative_duration_minutes: List[float] = []
+            running_total = 0.0
+            for minutes in daily_duration_minutes:
+                running_total += minutes
+                cumulative_duration_minutes.append(running_total)
+
+            ax_time_spent.bar(
+                positions,
+                daily_duration_minutes,
+                width=0.4,
+                color="#bcd4e6",
+                label="Time per day (min)"
+            )
+            ax_time_spent_right.plot(
+                positions,
+                cumulative_duration_minutes,
+                color="#33658a",
+                marker="o",
+                label="Cumulative time (min)"
+            )
+            ax_time_spent.set_xticks(positions)
+            ax_time_spent.set_xticklabels(
+                formatted_days,
+                rotation=45,
+                ha="right"
+            )
+            ax_time_spent.set_ylabel("Daily time (min)")
+            ax_time_spent_right.set_ylabel("Cumulative time (min)")
+            ax_time_spent.set_title("Time spent per day")
+            handles, labels = ax_time_spent.get_legend_handles_labels()
+            handles2, labels2 = ax_time_spent_right.get_legend_handles_labels()
+            ax_time_spent.legend(
+                handles + handles2,
+                labels + labels2,
+                loc="upper left"
+            )
+        else:
+            ax_time.set_title(
+                f"Daily averages ({speed_short_label} vs {correct_label.lower()})"
+            )
+            ax_time.text(
+                0.5,
+                0.5,
+                "No dated entries available",
+                ha="center",
+                va="center",
+                transform=ax_time.transAxes
+            )
+            ax_time.set_xticks([])
+            ax_time.set_yticks([])
+            ax_time_spent.set_title("Time spent per day")
+            ax_time_spent.text(
+                0.5,
+                0.5,
+                "No dated entries available",
+                ha="center",
+                va="center",
+                transform=ax_time_spent.transAxes
+            )
+            ax_time_spent.set_xticks([])
+            ax_time_spent.set_yticks([])
+            ax_time_spent_right.set_yticks([])
+
+        formatter = mticker.FormatStrFormatter("%.1f")
+        ax_time_spent.yaxis.set_major_formatter(formatter)
+        ax_time_spent_right.yaxis.set_major_formatter(formatter)
+
+        plt.tight_layout()
+        plt.show()
+
 
     def show_stats(self) -> None:
         """
@@ -1783,6 +2413,17 @@ class TypingTrainerApp:
         If no statistics file exists or no valid values can be read, an
         information dialog is shown instead.
         """
+        if self.is_sudden_death_active():
+            self._show_sudden_death_stats(
+                file_path=self.sudden_death_typing_stats_file_path,
+                header=SUDDEN_DEATH_TYPING_STATS_FILE_HEADER,
+                mode_label="typing",
+                speed_label="Words per minute",
+                speed_short_label="WPM",
+                correct_label="Correct characters"
+            )
+            return
+
         if not self.stats_file_path.exists():
             messagebox.showinfo(
                 "Statistics",
@@ -2126,6 +2767,17 @@ class TypingTrainerApp:
         """
         Visualize stored letter mode statistics (letters per minute and errors).
         """
+        if self.is_sudden_death_active():
+            self._show_sudden_death_stats(
+                file_path=self.sudden_death_letter_stats_file_path,
+                header=SUDDEN_DEATH_LETTER_STATS_FILE_HEADER,
+                mode_label="letter",
+                speed_label="Letters per minute",
+                speed_short_label="Letters/min",
+                correct_label="Correct letters"
+            )
+            return
+
         if not self.letter_stats_file_path.exists():
             messagebox.showinfo(
                 "Letter statistics",
@@ -2445,6 +3097,17 @@ class TypingTrainerApp:
         """
         Visualize stored number mode statistics (digits per minute and errors).
         """
+        if self.is_sudden_death_active():
+            self._show_sudden_death_stats(
+                file_path=self.sudden_death_number_stats_file_path,
+                header=SUDDEN_DEATH_NUMBER_STATS_FILE_HEADER,
+                mode_label="number",
+                speed_label="Digits per minute",
+                speed_short_label="Digits/min",
+                correct_label="Correct digits"
+            )
+            return
+
         if not self.number_stats_file_path.exists():
             messagebox.showinfo(
                 "Number statistics",
