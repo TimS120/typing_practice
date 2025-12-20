@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import List, TYPE_CHECKING
 import threading
 
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
@@ -30,6 +31,7 @@ import tkinter.font as tkfont
 from tkinter import ttk, messagebox
 
 
+GUI_WINDOW_XY = "1350x550"
 TEXT_FILE_NAME = "typing_texts.txt"
 STATS_FILE_NAME = "typing_stats.csv"
 LETTER_STATS_FILE_NAME = "letter_stats.csv"
@@ -319,7 +321,7 @@ class TypingTrainerApp:
         """
         self.master.title("Typing Trainer")
 
-        self.master.geometry("900x550")
+        self.master.geometry(GUI_WINDOW_XY)
 
         self.master.columnconfigure(0, weight=1)
         self.master.rowconfigure(0, weight=1)
@@ -485,9 +487,9 @@ class TypingTrainerApp:
 
         control_frame = ttk.Frame(right_frame)
         control_frame.grid(row=4, column=0, sticky="ew", pady=(8, 0))
-        for idx in range(9):
+        for idx in range(10):
             control_frame.columnconfigure(idx, weight=0)
-        control_frame.columnconfigure(8, weight=1)
+        control_frame.columnconfigure(9, weight=1)
 
         reset_button = ttk.Button(
             control_frame,
@@ -538,8 +540,15 @@ class TypingTrainerApp:
         )
         number_stats_button.grid(row=0, column=6, padx=(5, 0))
 
+        general_stats_button = ttk.Button(
+            control_frame,
+            text="General stats",
+            command=self.show_general_stats
+        )
+        general_stats_button.grid(row=0, column=7, padx=(5, 0))
+
         stats_filter_label = ttk.Label(control_frame, text="Stats filter:")
-        stats_filter_label.grid(row=0, column=7, padx=(10, 0), sticky="e")
+        stats_filter_label.grid(row=0, column=8, padx=(10, 0), sticky="e")
 
         stats_filter_values = [label for _, label in STATS_FILTER_OPTIONS]
         self.stats_filter_combobox = ttk.Combobox(
@@ -549,7 +558,7 @@ class TypingTrainerApp:
             state="readonly",
             width=18
         )
-        self.stats_filter_combobox.grid(row=0, column=8, padx=(5, 0), sticky="ew")
+        self.stats_filter_combobox.grid(row=0, column=9, padx=(5, 0), sticky="ew")
 
         # Initialize shared font for both text widgets
         self.text_font = tkfont.Font(
@@ -3420,6 +3429,216 @@ class TypingTrainerApp:
         ax_time_spent_right.yaxis.set_major_formatter(formatter)
 
         plt.tight_layout()
+        plt.show()
+
+
+    def show_general_stats(self) -> None:
+        """
+        Display cumulative time spent across all modes and a calendar heatmap.
+        """
+        stats_sources = [
+            (self.stats_file_path, STATS_FILE_HEADER),
+            (self.letter_stats_file_path, LETTER_STATS_FILE_HEADER),
+            (self.number_stats_file_path, NUMBER_STATS_FILE_HEADER),
+            (
+                self.sudden_death_typing_stats_file_path,
+                SUDDEN_DEATH_TYPING_STATS_FILE_HEADER
+            ),
+            (
+                self.sudden_death_letter_stats_file_path,
+                SUDDEN_DEATH_LETTER_STATS_FILE_HEADER
+            ),
+            (
+                self.sudden_death_number_stats_file_path,
+                SUDDEN_DEATH_NUMBER_STATS_FILE_HEADER
+            )
+        ]
+
+        daily_seconds: dict[date, float] = {}
+        total_seconds = 0.0
+
+        for path, header in stats_sources:
+            if not path.exists():
+                continue
+            ensure_stats_file_header(
+                path,
+                header,
+                create_if_missing=False
+            )
+            with path.open("r", encoding="utf-8") as file:
+                for line in file:
+                    line = line.strip()
+                    if not line or line == header:
+                        continue
+                    parts = line.split(";")
+                    if len(parts) <= 3:
+                        continue
+                    try:
+                        timestamp = datetime.strptime(
+                            parts[0],
+                            "%Y-%m-%d %H:%M:%S"
+                        )
+                    except ValueError:
+                        continue
+                    try:
+                        duration_seconds = float(parts[3])
+                    except ValueError:
+                        continue
+                    duration_seconds = max(duration_seconds, 0.0)
+                    if duration_seconds == 0.0:
+                        continue
+                    day = timestamp.date()
+                    daily_seconds[day] = (
+                        daily_seconds.get(day, 0.0) + duration_seconds
+                    )
+                    total_seconds += duration_seconds
+
+        today = datetime.now().date()
+        start_date = today - timedelta(days=364)
+        start_week = start_date - timedelta(days=start_date.weekday())
+        end_week = today + timedelta(days=(6 - today.weekday()))
+        total_days = (end_week - start_week).days + 1
+        num_weeks = max(total_days // 7, 1)
+
+        heatmap_data = np.full((7, num_weeks), np.nan, dtype=float)
+        date_grid: list[list[date | None]] = [
+            [None for _ in range(num_weeks)] for _ in range(7)
+        ]
+
+        current_day = start_week
+        for idx in range(total_days):
+            week_idx = idx // 7
+            weekday_idx = current_day.weekday()
+            if week_idx >= num_weeks:
+                break
+            date_grid[weekday_idx][week_idx] = current_day
+            if start_date <= current_day <= today:
+                seconds = daily_seconds.get(current_day, 0.0)
+                heatmap_data[weekday_idx, week_idx] = seconds / 60.0
+            current_day += timedelta(days=1)
+
+        max_minutes = np.nanmax(heatmap_data)
+        if not np.isfinite(max_minutes) or max_minutes == 0.0:
+            max_minutes = 1.0
+
+        total_minutes = total_seconds / 60.0
+        total_hours = total_seconds / 3600.0
+
+        fig, ax = plt.subplots(figsize=(14, 5))
+        self._configure_figure_window(fig)
+        cmap = mcolors.LinearSegmentedColormap.from_list(
+            "time_heatmap",
+            ["#ffffff", "#0d3b66"]
+        )
+        cmap.set_bad(color="#f0f0f0")
+        norm = mcolors.Normalize(vmin=0.0, vmax=max_minutes)
+        im = ax.imshow(
+            heatmap_data,
+            aspect="auto",
+            origin="upper",
+            cmap=cmap,
+            norm=norm
+        )
+
+        colorbar = fig.colorbar(im, ax=ax, pad=0.02)
+        colorbar.set_label("Minutes spent per day")
+
+        weekday_labels = [
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+            "Sunday"
+        ]
+        ax.set_yticks(range(7))
+        ax.set_yticklabels(weekday_labels)
+
+        week_start_days = [
+            start_week + timedelta(days=week_idx * 7)
+            for week_idx in range(num_weeks)
+        ]
+        tick_positions: List[int] = []
+        tick_labels: List[str] = []
+        for idx, week_start in enumerate(week_start_days):
+            if idx == 0 or week_start.day <= 7:
+                tick_positions.append(idx)
+                tick_labels.append(week_start.strftime("%b %d"))
+
+        if tick_positions:
+            ax.set_xticks(tick_positions)
+            ax.set_xticklabels(tick_labels, rotation=45, ha="right")
+
+        ax.set_xlabel("Weeks (starting Mondays)")
+        ax.set_ylabel("Day of week")
+        ax.set_title("Daily time spent (last 365 days)")
+
+        summary_text = (
+            f"Cumulative time across all modes: "
+            f"{total_minutes:.1f} min ({total_hours:.1f} h)"
+        )
+        fig.text(
+            0.5,
+            0.96,
+            summary_text,
+            ha="center",
+            va="top",
+            fontsize=13,
+            fontweight="bold"
+        )
+
+        annotation = ax.annotate(
+            "",
+            xy=(0, 0),
+            xytext=(15, 15),
+            textcoords="offset points",
+            bbox=dict(boxstyle="round", fc="#ffffff", ec="#333333", alpha=0.9),
+            arrowprops=dict(arrowstyle="->", color="#333333")
+        )
+        annotation.set_visible(False)
+
+        def _format_minutes(value: float) -> str:
+            if value >= 60.0:
+                return f"{value / 60.0:.1f} h"
+            return f"{value:.1f} min"
+
+        def _on_mouse_move(event) -> None:
+            if event.inaxes != ax or event.xdata is None or event.ydata is None:
+                if annotation.get_visible():
+                    annotation.set_visible(False)
+                    fig.canvas.draw_idle()
+                return
+            week_idx = int(event.xdata)
+            weekday_idx = int(event.ydata)
+            if (
+                week_idx < 0
+                or week_idx >= num_weeks
+                or weekday_idx < 0
+                or weekday_idx >= 7
+            ):
+                if annotation.get_visible():
+                    annotation.set_visible(False)
+                    fig.canvas.draw_idle()
+                return
+            date_value = date_grid[weekday_idx][week_idx]
+            cell_value = heatmap_data[weekday_idx, week_idx]
+            if date_value is None or not np.isfinite(cell_value):
+                if annotation.get_visible():
+                    annotation.set_visible(False)
+                    fig.canvas.draw_idle()
+                return
+            annotation.xy = (week_idx, weekday_idx)
+            annotation.set_text(
+                f"{date_value.strftime('%Y-%m-%d (%a)')}\n"
+                f"Time: {_format_minutes(cell_value)}"
+            )
+            annotation.set_visible(True)
+            fig.canvas.draw_idle()
+
+        fig.canvas.mpl_connect("motion_notify_event", _on_mouse_move)
+
+        plt.tight_layout(rect=(0.0, 0.0, 1.0, 0.93))
         plt.show()
 
 
