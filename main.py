@@ -3457,7 +3457,7 @@ class TypingTrainerApp:
 
     def show_general_stats(self) -> None:
         """
-        Display cumulative time spent across all modes and a calendar heatmap.
+        Display cumulative time spent across all modes with heatmap and timeline views.
         """
         stats_sources = [
             (self.stats_file_path, STATS_FILE_HEADER),
@@ -3540,14 +3540,49 @@ class TypingTrainerApp:
                 heatmap_data[weekday_idx, week_idx] = seconds / 60.0
             current_day += timedelta(days=1)
 
+        monthly_totals: dict[tuple[int, int], float] = {}
+        for day_value, seconds in daily_seconds.items():
+            if start_date <= day_value <= today:
+                key = (day_value.year, day_value.month)
+                monthly_totals[key] = (
+                    monthly_totals.get(key, 0.0) + seconds / 60.0
+                )
+
+        def _first_of_month(value: date) -> date:
+            return date(value.year, value.month, 1)
+
+        monthly_labels: list[str] = []
+        monthly_minutes: list[float] = []
+        cumulative_minutes: list[float] = []
+        cumulative_total = 0.0
+        current_month = _first_of_month(start_date)
+        last_month = _first_of_month(today)
+        while current_month <= last_month:
+            key = (current_month.year, current_month.month)
+            minutes_value = monthly_totals.get(key, 0.0)
+            cumulative_total += minutes_value
+            monthly_labels.append(current_month.strftime("%b %Y"))
+            monthly_minutes.append(minutes_value)
+            cumulative_minutes.append(cumulative_total)
+            if current_month.month == 12:
+                current_month = date(current_month.year + 1, 1, 1)
+            else:
+                current_month = date(
+                    current_month.year,
+                    current_month.month + 1,
+                    1
+                )
+
         max_minutes = np.nanmax(heatmap_data)
         if not np.isfinite(max_minutes) or max_minutes == 0.0:
             max_minutes = 1.0
 
-        total_minutes = total_seconds / 60.0
-        total_hours = total_seconds / 3600.0
-
-        fig, ax = plt.subplots(figsize=(14, 5))
+        fig, (ax_heatmap, ax_time_spent) = plt.subplots(
+            2,
+            1,
+            figsize=(14, 9),
+            gridspec_kw={"height_ratios": (2.2, 1.0)}
+        )
         self._configure_figure_window(fig)
         cmap = mcolors.LinearSegmentedColormap.from_list(
             "time_heatmap",
@@ -3555,7 +3590,7 @@ class TypingTrainerApp:
         )
         cmap.set_bad(color="#f0f0f0")
         norm = mcolors.Normalize(vmin=0.0, vmax=max_minutes)
-        im = ax.imshow(
+        im = ax_heatmap.imshow(
             heatmap_data,
             aspect="auto",
             origin="upper",
@@ -3563,7 +3598,7 @@ class TypingTrainerApp:
             norm=norm
         )
 
-        colorbar = fig.colorbar(im, ax=ax, pad=0.02)
+        colorbar = fig.colorbar(im, ax=ax_heatmap, pad=0.02)
         colorbar.set_label("Minutes spent per day")
 
         weekday_labels = [
@@ -3575,8 +3610,8 @@ class TypingTrainerApp:
             "Saturday",
             "Sunday"
         ]
-        ax.set_yticks(range(7))
-        ax.set_yticklabels(weekday_labels)
+        ax_heatmap.set_yticks(range(7))
+        ax_heatmap.set_yticklabels(weekday_labels)
 
         week_start_days = [
             start_week + timedelta(days=week_idx * 7)
@@ -3590,28 +3625,53 @@ class TypingTrainerApp:
                 tick_labels.append(week_start.strftime("%b %d"))
 
         if tick_positions:
-            ax.set_xticks(tick_positions)
-            ax.set_xticklabels(tick_labels, rotation=45, ha="right")
+            ax_heatmap.set_xticks(tick_positions)
+            ax_heatmap.set_xticklabels(tick_labels, rotation=45, ha="right")
 
-        ax.set_xlabel("Weeks (starting Mondays)")
-        ax.set_ylabel("Day of week")
-        ax.set_title("Daily time spent (last 365 days)")
+        ax_heatmap.set_xlabel("Weeks (starting Mondays)")
+        ax_heatmap.set_ylabel("Day of week")
+        ax_heatmap.set_title("Daily time spent (last 365 days)")
 
-        summary_text = (
-            f"Cumulative time across all modes: "
-            f"{total_minutes:.1f} min ({total_hours:.1f} h)"
+        month_positions = np.arange(len(monthly_minutes))
+        ax_time_spent.bar(
+            month_positions,
+            monthly_minutes,
+            width=0.5,
+            color="#bcd4e6",
+            label="Time per month (min)"
         )
-        fig.text(
-            0.5,
-            0.96,
-            summary_text,
-            ha="center",
-            va="top",
-            fontsize=13,
-            fontweight="bold"
+        ax_cumulative = ax_time_spent.twinx()
+        cumulative_line, = ax_cumulative.plot(
+            month_positions,
+            cumulative_minutes,
+            color="#33658a",
+            marker="o",
+            linewidth=1.8,
+            label="Cumulative time (min)"
+        )
+        ax_time_spent.set_xticks(month_positions)
+        ax_time_spent.set_xticklabels(
+            monthly_labels,
+            rotation=45,
+            ha="right"
+        )
+        ax_time_spent.set_ylabel("Minutes per month")
+        ax_cumulative.set_ylabel("Cumulative minutes")
+        ax_time_spent.set_xlabel("Month")
+        ax_time_spent.set_title("Time spent progression (last 365 days)")
+        formatter = mticker.FormatStrFormatter("%.0f")
+        ax_time_spent.yaxis.set_major_formatter(formatter)
+        ax_cumulative.yaxis.set_major_formatter(formatter)
+        handles, labels = ax_time_spent.get_legend_handles_labels()
+        handles2, labels2 = ax_cumulative.get_legend_handles_labels()
+        ax_time_spent.legend(
+            handles + handles2,
+            labels + labels2,
+            loc="upper left",
+            frameon=False
         )
 
-        annotation = ax.annotate(
+        annotation = ax_heatmap.annotate(
             "",
             xy=(0, 0),
             xytext=(15, 15),
@@ -3627,7 +3687,11 @@ class TypingTrainerApp:
             return f"{value:.1f} min"
 
         def _on_mouse_move(event) -> None:
-            if event.inaxes != ax or event.xdata is None or event.ydata is None:
+            if (
+                event.inaxes != ax_heatmap
+                or event.xdata is None
+                or event.ydata is None
+            ):
                 if annotation.get_visible():
                     annotation.set_visible(False)
                     fig.canvas.draw_idle()
@@ -3660,8 +3724,7 @@ class TypingTrainerApp:
             fig.canvas.draw_idle()
 
         fig.canvas.mpl_connect("motion_notify_event", _on_mouse_move)
-
-        plt.tight_layout(rect=(0.0, 0.0, 1.0, 0.93))
+        plt.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
         plt.show()
 
 
