@@ -299,6 +299,7 @@ class TypingTrainerApp:
         self.number_total_digits: int = 0
         self.number_errors: int = 0
         self.number_correct_digits: int = 0
+        self.last_session_mode: str = "typing"
         self.style = ttk.Style()
         self.dark_mode_enabled: bool = False
         self.dark_mode_var = tk.BooleanVar(master=self.master, value=False)
@@ -494,7 +495,7 @@ class TypingTrainerApp:
         reset_button = ttk.Button(
             control_frame,
             text="Reset session",
-            command=self.reset_session
+            command=self.handle_reset_button
         )
         reset_button.grid(row=0, column=0, padx=(0, 5))
 
@@ -1125,6 +1126,9 @@ class TypingTrainerApp:
             self.number_index = 0
             self.number_total_digits = 0
 
+        if exit_letter_mode and exit_number_mode:
+            self.last_session_mode = "typing"
+
         self.wpm_label.configure(
             text="Time: 0.0 s  |  WPM: 0.0  |  Errors: 0  |  Error %: 0.0"
         )
@@ -1132,6 +1136,21 @@ class TypingTrainerApp:
         if self.update_job_id is not None:
             self.master.after_cancel(self.update_job_id)
             self.update_job_id = None
+
+
+    def handle_reset_button(self) -> None:
+        """
+        Reset or restart the currently active training mode.
+        """
+        if self.is_letter_mode or self.last_session_mode == "letter":
+            self.start_letter_mode()
+            return
+
+        if self.is_number_mode or self.last_session_mode == "number":
+            self.start_number_mode()
+            return
+
+        self.reset_session()
 
 
     def start_letter_mode(self) -> None:
@@ -1158,6 +1177,7 @@ class TypingTrainerApp:
         )
         self._update_letter_display()
         self.update_letter_status_label()
+        self.last_session_mode = "letter"
 
 
     def handle_letter_mode_keypress(self, event: tk.Event) -> None:
@@ -1368,6 +1388,7 @@ class TypingTrainerApp:
         self.letter_total_letters = 0
         self.letter_errors = 0
         self.letter_correct_letters = 0
+        self.last_session_mode = "letter"
 
 
     def start_number_mode(self) -> None:
@@ -1394,6 +1415,7 @@ class TypingTrainerApp:
         )
         self._update_number_display()
         self.update_number_status_label()
+        self.last_session_mode = "number"
 
 
     def handle_number_mode_keypress(self, event: tk.Event) -> None:
@@ -1602,6 +1624,7 @@ class TypingTrainerApp:
         self.number_total_digits = 0
         self.number_errors = 0
         self.number_correct_digits = 0
+        self.last_session_mode = "number"
 
 
     def on_key_press(self, event: tk.Event) -> None:
