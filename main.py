@@ -80,6 +80,7 @@ DEFAULT_FONT_SIZE = 12
 MIN_FONT_SIZE = 6
 MAX_FONT_SIZE = 48
 LETTER_SEQUENCE_LENGTH = 100
+LETTER_MODE_CHARACTERS = string.ascii_letters + "\u00e4\u00f6\u00fc\u00c4\u00d6\u00dc"
 NUMBER_SEQUENCE_LENGTH = 100
 TARGET_TEXT_DISPLAY_WIDTH = 90
 TARGET_TEXT_LINE_LENGTH = 80
@@ -1162,7 +1163,7 @@ class TypingTrainerApp:
         self.letter_sequence = []
         previous_lower = ""
         while len(self.letter_sequence) < LETTER_SEQUENCE_LENGTH:
-            candidate = random.choice(string.ascii_letters)
+            candidate = random.choice(LETTER_MODE_CHARACTERS)
             if previous_lower and candidate.lower() == previous_lower:
                 continue
             self.letter_sequence.append(candidate)
