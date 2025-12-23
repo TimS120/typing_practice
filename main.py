@@ -4391,6 +4391,12 @@ class TypingTrainerApp:
                     fig.canvas.draw_idle()
                 return
             annotation.xy = (week_idx, weekday_idx)
+            if week_idx >= num_weeks - 5:
+                annotation.xytext = (-15, 15)
+                annotation.set_ha("right")
+            else:
+                annotation.xytext = (15, 15)
+                annotation.set_ha("left")
             annotation.set_text(
                 f"{date_value.strftime('%Y-%m-%d (%a)')}\n"
                 f"Time: {_format_minutes(cell_value)}"
