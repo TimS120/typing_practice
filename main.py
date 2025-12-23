@@ -4129,33 +4129,90 @@ class TypingTrainerApp:
         """
         Display cumulative time spent across all modes with heatmap and timeline views.
         """
+        def _training_flag_index_from_header(header: str) -> int | None:
+            columns = header.split(";")
+            try:
+                return columns.index(TRAINING_FLAG_COLUMN)
+            except ValueError:
+                return None
+
         stats_sources = [
-            (self.stats_file_path, STATS_FILE_HEADER),
-            (self.letter_stats_file_path, LETTER_STATS_FILE_HEADER),
-            (self.special_stats_file_path, SPECIAL_STATS_FILE_HEADER),
-            (self.number_stats_file_path, NUMBER_STATS_FILE_HEADER),
+            (
+                self.stats_file_path,
+                STATS_FILE_HEADER,
+                "typing",
+                _training_flag_index_from_header(STATS_FILE_HEADER)
+            ),
+            (
+                self.letter_stats_file_path,
+                LETTER_STATS_FILE_HEADER,
+                "letter",
+                _training_flag_index_from_header(LETTER_STATS_FILE_HEADER)
+            ),
+            (
+                self.special_stats_file_path,
+                SPECIAL_STATS_FILE_HEADER,
+                "character",
+                _training_flag_index_from_header(SPECIAL_STATS_FILE_HEADER)
+            ),
+            (
+                self.number_stats_file_path,
+                NUMBER_STATS_FILE_HEADER,
+                "number",
+                _training_flag_index_from_header(NUMBER_STATS_FILE_HEADER)
+            ),
             (
                 self.sudden_death_typing_stats_file_path,
-                SUDDEN_DEATH_TYPING_STATS_FILE_HEADER
+                SUDDEN_DEATH_TYPING_STATS_FILE_HEADER,
+                "typing",
+                _training_flag_index_from_header(
+                    SUDDEN_DEATH_TYPING_STATS_FILE_HEADER
+                )
             ),
             (
                 self.sudden_death_letter_stats_file_path,
-                SUDDEN_DEATH_LETTER_STATS_FILE_HEADER
+                SUDDEN_DEATH_LETTER_STATS_FILE_HEADER,
+                "letter",
+                _training_flag_index_from_header(
+                    SUDDEN_DEATH_LETTER_STATS_FILE_HEADER
+                )
             ),
             (
                 self.sudden_death_special_stats_file_path,
-                SUDDEN_DEATH_SPECIAL_STATS_FILE_HEADER
+                SUDDEN_DEATH_SPECIAL_STATS_FILE_HEADER,
+                "character",
+                _training_flag_index_from_header(
+                    SUDDEN_DEATH_SPECIAL_STATS_FILE_HEADER
+                )
             ),
             (
                 self.sudden_death_number_stats_file_path,
-                SUDDEN_DEATH_NUMBER_STATS_FILE_HEADER
+                SUDDEN_DEATH_NUMBER_STATS_FILE_HEADER,
+                "number",
+                _training_flag_index_from_header(
+                    SUDDEN_DEATH_NUMBER_STATS_FILE_HEADER
+                )
             )
         ]
 
+        mode_labels: dict[str, str] = {
+            "typing": "Typing text",
+            "letter": "Letter mode",
+            "number": "Number mode",
+            "character": "Character mode"
+        }
+
         daily_seconds: dict[date, float] = {}
         total_seconds = 0.0
+        mode_seconds: dict[str, float] = {key: 0.0 for key in mode_labels}
+        training_seconds = {"training": 0.0, "regular": 0.0}
 
-        for path, header in stats_sources:
+        def _is_training_run(parts: list[str], flag_index: int | None) -> bool:
+            if flag_index is None or flag_index >= len(parts):
+                return False
+            return parts[flag_index].strip().lower() in {"1", "true", "yes", "y"}
+
+        for path, header, mode_key, training_index in stats_sources:
             if not path.exists():
                 continue
             ensure_stats_file_header(
@@ -4190,6 +4247,11 @@ class TypingTrainerApp:
                         daily_seconds.get(day, 0.0) + duration_seconds
                     )
                     total_seconds += duration_seconds
+                    mode_seconds[mode_key] += duration_seconds
+                    if _is_training_run(parts, training_index):
+                        training_seconds["training"] += duration_seconds
+                    else:
+                        training_seconds["regular"] += duration_seconds
 
         today = datetime.now().date()
         start_date = today - timedelta(days=364)
@@ -4252,12 +4314,18 @@ class TypingTrainerApp:
         if not np.isfinite(max_minutes) or max_minutes == 0.0:
             max_minutes = 1.0
 
-        fig, (ax_heatmap, ax_time_spent) = plt.subplots(
+        fig = plt.figure(figsize=(14, 10.2))
+        gridspec = fig.add_gridspec(
+            3,
             2,
-            1,
-            figsize=(14, 9),
-            gridspec_kw={"height_ratios": (2.2, 1.0)}
+            height_ratios=(2.3, 1.15, 0.9),
+            hspace=0.65,
+            wspace=0.12
         )
+        ax_heatmap = fig.add_subplot(gridspec[0, :])
+        ax_time_spent = fig.add_subplot(gridspec[1, :])
+        ax_modes = fig.add_subplot(gridspec[2, 0])
+        ax_training = fig.add_subplot(gridspec[2, 1])
         self._configure_figure_window(fig)
         cmap = mcolors.LinearSegmentedColormap.from_list(
             "time_heatmap",
@@ -4404,8 +4472,80 @@ class TypingTrainerApp:
             annotation.set_visible(True)
             fig.canvas.draw_idle()
 
+        def _build_pie_chart(
+            ax: plt.Axes,
+            values: list[float],
+            label_texts: list[str],
+            colors: list[str],
+            title: str
+        ) -> None:
+            ax.clear()
+            ax.set_aspect("equal")
+            ax.set_xticks([])
+            ax.set_yticks([])
+            for spine in ax.spines.values():
+                spine.set_visible(False)
+            total = sum(values)
+            if total <= 0.0:
+                ax.text(
+                    0.5,
+                    0.5,
+                    "No time recorded yet",
+                    ha="center",
+                    va="center"
+                )
+                ax.set_title(title, pad=12)
+                return
+            wedges, _ = ax.pie(
+                values,
+                colors=colors,
+                startangle=90
+            )
+            legend_entries = []
+            for label, value in zip(label_texts, values):
+                percent = (value / total * 100.0) if total else 0.0
+                legend_entries.append(
+                    f"{label}: {percent:.1f}% ({_format_minutes(value)})"
+                )
+            ax.legend(
+                wedges,
+                legend_entries,
+                loc="center left",
+                bbox_to_anchor=(0.9, 0.5),
+                frameon=False
+            )
+            ax.set_title(title, pad=16)
+
         fig.canvas.mpl_connect("motion_notify_event", _on_mouse_move)
-        plt.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
+
+        mode_order = ["typing", "letter", "number", "character"]
+        mode_minutes = [mode_seconds[key] / 60.0 for key in mode_order]
+        training_minutes = [
+            training_seconds["training"] / 60.0,
+            training_seconds["regular"] / 60.0
+        ]
+
+        mode_colors = ["#4f6d7a", "#7b8c5f", "#b7a57a", "#9a8c98"]
+        _build_pie_chart(
+            ax_modes,
+            mode_minutes,
+            [mode_labels[key] for key in mode_order],
+            mode_colors,
+            "Time spent by mode"
+        )
+
+        training_labels = ["Training mode", "Non-training mode"]
+        training_colors = ["#547c8c", "#a0606a"]
+        _build_pie_chart(
+            ax_training,
+            training_minutes,
+            training_labels,
+            training_colors,
+            "Training vs non-training time"
+        )
+
+        fig.tight_layout()
+        fig.subplots_adjust(top=0.94, bottom=0.02, left=0.05, right=0.98)
         plt.show()
 
 
