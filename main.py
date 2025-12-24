@@ -1213,24 +1213,42 @@ class TypingTrainerApp:
         self.reset_session(clear_display=True)
         self.is_letter_mode = True
         self.letter_sequence = []
-        previous_lower = ""
-        while len(self.letter_sequence) < LETTER_SEQUENCE_LENGTH:
+        self.letter_index = 0
+        self.letter_total_letters = 0
+        self._extend_letter_sequence()
+        self.letter_errors = 0
+        self.letter_correct_letters = 0
+        self.start_time = None
+        if self.is_sudden_death_active():
+            info_text = (
+                "Sudden death letter mode: random letters until the first mistake."
+            )
+        else:
+            info_text = (
+                "Letter mode: random letters (upper/lower). Progress 0/100."
+            )
+        self.info_label.configure(text=info_text)
+        self._update_letter_display()
+        self.update_letter_status_label()
+        self.last_session_mode = "letter"
+
+    def _extend_letter_sequence(self, chunk_size: int = LETTER_SEQUENCE_LENGTH) -> None:
+        """
+        Append additional random letters, keeping the no-repeat constraint intact.
+        """
+        if chunk_size <= 0:
+            return
+        previous_lower = (
+            self.letter_sequence[-1].lower() if self.letter_sequence else ""
+        )
+        target_length = len(self.letter_sequence) + chunk_size
+        while len(self.letter_sequence) < target_length:
             candidate = random.choice(LETTER_MODE_CHARACTERS)
             if previous_lower and candidate.lower() == previous_lower:
                 continue
             self.letter_sequence.append(candidate)
             previous_lower = candidate.lower()
-        self.letter_index = 0
         self.letter_total_letters = len(self.letter_sequence)
-        self.letter_errors = 0
-        self.letter_correct_letters = 0
-        self.start_time = None
-        self.info_label.configure(
-            text="Letter mode: random letters (upper/lower). Progress 0/100."
-        )
-        self._update_letter_display()
-        self.update_letter_status_label()
-        self.last_session_mode = "letter"
 
 
     def handle_letter_mode_keypress(self, event: tk.Event) -> None:
@@ -1280,9 +1298,14 @@ class TypingTrainerApp:
             self.letter_index += 1
             self.input_text.delete("1.0", tk.END)
             if self.letter_index >= self.letter_total_letters:
-                self.finish_letter_mode_session(
-                    sudden_death=self.is_sudden_death_active()
-                )
+                if self.is_sudden_death_active():
+                    self._extend_letter_sequence()
+                    self._update_letter_display()
+                    self.update_letter_status_label()
+                else:
+                    self.finish_letter_mode_session(
+                        sudden_death=self.is_sudden_death_active()
+                    )
             else:
                 self._update_letter_display()
                 self.update_letter_status_label()
@@ -1310,10 +1333,16 @@ class TypingTrainerApp:
                 "1.0",
                 f"{next_letter}\n{letter_type.upper()}"
             )
-            progress = (
-                f"Letter mode: type the {letter_type} letter shown "
-                f"({self.letter_index}/{self.letter_total_letters})"
-            )
+            if self.is_sudden_death_active():
+                progress = (
+                    "Sudden death letter mode: type the letter shown "
+                    f"(streak {self.letter_index})"
+                )
+            else:
+                progress = (
+                    f"Letter mode: type the {letter_type} letter shown "
+                    f"({self.letter_index}/{self.letter_total_letters})"
+                )
             self.info_label.configure(text=progress)
         else:
             self.info_label.configure(
@@ -1339,7 +1368,10 @@ class TypingTrainerApp:
             if elapsed_minutes > 0.0:
                 letters_per_minute = self.letter_correct_letters / elapsed_minutes
 
-        progress = f"{self.letter_correct_letters}/{self.letter_total_letters}"
+        if self.is_sudden_death_active():
+            progress = f"{self.letter_correct_letters} correct (no limit)"
+        else:
+            progress = f"{self.letter_correct_letters}/{self.letter_total_letters}"
 
         self.wpm_label.configure(
             text=(
@@ -1451,25 +1483,40 @@ class TypingTrainerApp:
         self.reset_session(clear_display=True)
         self.is_special_mode = True
         self.special_sequence = []
-        previous_char = ""
-        while len(self.special_sequence) < SPECIAL_SEQUENCE_LENGTH:
+        self.special_index = 0
+        self.special_total_chars = 0
+        self._extend_special_sequence()
+        self.special_errors = 0
+        self.special_correct_chars = 0
+        self.start_time = None
+        if self.is_sudden_death_active():
+            info_text = (
+                "Sudden death special mode: punctuation practice until the first error."
+            )
+        else:
+            info_text = (
+                "Special character mode: focus on punctuation and symbols. Progress 0/100."
+            )
+        self.info_label.configure(text=info_text)
+        self._update_special_display()
+        self.update_special_status_label()
+        self.last_session_mode = "special"
+
+    def _extend_special_sequence(self, chunk_size: int = SPECIAL_SEQUENCE_LENGTH) -> None:
+        """
+        Append additional random special characters without consecutive duplicates.
+        """
+        if chunk_size <= 0:
+            return
+        previous_char = self.special_sequence[-1] if self.special_sequence else ""
+        target_length = len(self.special_sequence) + chunk_size
+        while len(self.special_sequence) < target_length:
             candidate = random.choice(SPECIAL_MODE_CHARACTERS)
             if previous_char and candidate == previous_char:
                 continue
             self.special_sequence.append(candidate)
             previous_char = candidate
-        self.special_index = 0
         self.special_total_chars = len(self.special_sequence)
-        self.special_errors = 0
-        self.special_correct_chars = 0
-        self.start_time = None
-        self.info_label.configure(
-            text="Special character mode: focus on punctuation and symbols. "
-            "Progress 0/100."
-        )
-        self._update_special_display()
-        self.update_special_status_label()
-        self.last_session_mode = "special"
 
     def handle_special_mode_keypress(self, event: tk.Event) -> None:
         """
@@ -1516,9 +1563,14 @@ class TypingTrainerApp:
             self.special_index += 1
             self.input_text.delete("1.0", tk.END)
             if self.special_index >= self.special_total_chars:
-                self.finish_special_mode_session(
-                    sudden_death=self.is_sudden_death_active()
-                )
+                if self.is_sudden_death_active():
+                    self._extend_special_sequence()
+                    self._update_special_display()
+                    self.update_special_status_label()
+                else:
+                    self.finish_special_mode_session(
+                        sudden_death=self.is_sudden_death_active()
+                    )
             else:
                 self._update_special_display()
                 self.update_special_status_label()
@@ -1544,10 +1596,16 @@ class TypingTrainerApp:
                 "1.0",
                 f"{next_symbol}\n(SYMBOL)"
             )
-            progress = (
-                "Special character mode: type the symbol shown "
-                f"({self.special_index}/{self.special_total_chars})"
-            )
+            if self.is_sudden_death_active():
+                progress = (
+                    "Sudden death special mode: type the symbol shown "
+                    f"(streak {self.special_index})"
+                )
+            else:
+                progress = (
+                    "Special character mode: type the symbol shown "
+                    f"({self.special_index}/{self.special_total_chars})"
+                )
             self.info_label.configure(text=progress)
         else:
             self.info_label.configure(
@@ -1572,7 +1630,10 @@ class TypingTrainerApp:
             if elapsed_minutes > 0.0:
                 symbols_per_minute = self.special_correct_chars / elapsed_minutes
 
-        progress = f"{self.special_correct_chars}/{self.special_total_chars}"
+        if self.is_sudden_death_active():
+            progress = f"{self.special_correct_chars} correct (no limit)"
+        else:
+            progress = f"{self.special_correct_chars}/{self.special_total_chars}"
 
         self.wpm_label.configure(
             text=(
@@ -1683,24 +1744,40 @@ class TypingTrainerApp:
         self.reset_session(clear_display=True)
         self.is_number_mode = True
         self.number_sequence = []
-        previous_digit = ""
-        while len(self.number_sequence) < NUMBER_SEQUENCE_LENGTH:
+        self.number_index = 0
+        self.number_total_digits = 0
+        self._extend_number_sequence()
+        self.number_errors = 0
+        self.number_correct_digits = 0
+        self.start_time = None
+        if self.is_sudden_death_active():
+            info_text = (
+                "Sudden death number mode: keep typing digits until the first error."
+            )
+        else:
+            info_text = (
+                "Number mode: type digits with the numeric keypad. Progress 0/100."
+            )
+        self.info_label.configure(text=info_text)
+        self._update_number_display()
+        self.update_number_status_label()
+        self.last_session_mode = "number"
+
+    def _extend_number_sequence(self, chunk_size: int = NUMBER_SEQUENCE_LENGTH) -> None:
+        """
+        Append additional random digits while avoiding immediate repeats.
+        """
+        if chunk_size <= 0:
+            return
+        previous_digit = self.number_sequence[-1] if self.number_sequence else ""
+        target_length = len(self.number_sequence) + chunk_size
+        while len(self.number_sequence) < target_length:
             candidate = random.choice(string.digits)
             if previous_digit and candidate == previous_digit:
                 continue
             self.number_sequence.append(candidate)
             previous_digit = candidate
-        self.number_index = 0
         self.number_total_digits = len(self.number_sequence)
-        self.number_errors = 0
-        self.number_correct_digits = 0
-        self.start_time = None
-        self.info_label.configure(
-            text="Number mode: type digits with the numeric keypad. Progress 0/100."
-        )
-        self._update_number_display()
-        self.update_number_status_label()
-        self.last_session_mode = "number"
 
 
     def handle_number_mode_keypress(self, event: tk.Event) -> None:
@@ -1749,9 +1826,14 @@ class TypingTrainerApp:
             self.number_index += 1
             self.input_text.delete("1.0", tk.END)
             if self.number_index >= self.number_total_digits:
-                self.finish_number_mode_session(
-                    sudden_death=self.is_sudden_death_active()
-                )
+                if self.is_sudden_death_active():
+                    self._extend_number_sequence()
+                    self._update_number_display()
+                    self.update_number_status_label()
+                else:
+                    self.finish_number_mode_session(
+                        sudden_death=self.is_sudden_death_active()
+                    )
             else:
                 self._update_number_display()
                 self.update_number_status_label()
@@ -1778,10 +1860,16 @@ class TypingTrainerApp:
                 "1.0",
                 f"{next_digit}\n(DIGIT)"
             )
-            progress = (
-                f"Number mode: type the digit shown "
-                f"({self.number_index}/{self.number_total_digits})"
-            )
+            if self.is_sudden_death_active():
+                progress = (
+                    "Sudden death number mode: type the digit shown "
+                    f"(streak {self.number_index})"
+                )
+            else:
+                progress = (
+                    f"Number mode: type the digit shown "
+                    f"({self.number_index}/{self.number_total_digits})"
+                )
             self.info_label.configure(text=progress)
         else:
             self.info_label.configure(
@@ -1807,7 +1895,10 @@ class TypingTrainerApp:
             if elapsed_minutes > 0.0:
                 digits_per_minute = self.number_correct_digits / elapsed_minutes
 
-        progress = f"{self.number_correct_digits}/{self.number_total_digits}"
+        if self.is_sudden_death_active():
+            progress = f"{self.number_correct_digits} correct (no limit)"
+        else:
+            progress = f"{self.number_correct_digits}/{self.number_total_digits}"
 
         self.wpm_label.configure(
             text=(
