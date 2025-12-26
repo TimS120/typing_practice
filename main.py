@@ -57,6 +57,7 @@ LETTER_STATS_FILE_NAME = "letter_stats.csv"
 SPECIAL_STATS_FILE_NAME = "special_character_stats.csv"
 NUMBER_STATS_FILE_NAME = "number_stats.csv"
 TRAINING_FLAG_COLUMN = "is_training_run"
+END_ERROR_PERCENTAGE_COLUMN = "end_error_percentage"
 STATS_FILE_HEADER = (
     f"timestamp;wpm;error_percentage;duration_seconds;{TRAINING_FLAG_COLUMN}"
 )
@@ -92,6 +93,26 @@ SUDDEN_DEATH_NUMBER_STATS_FILE_HEADER = (
     "timestamp;digits_per_minute;correct_digits;duration_seconds;"
     f"completed;{TRAINING_FLAG_COLUMN}"
 )
+BLIND_TYPING_STATS_FILE_NAME = "blind_typing_stats.csv"
+BLIND_LETTER_STATS_FILE_NAME = "blind_letter_stats.csv"
+BLIND_SPECIAL_STATS_FILE_NAME = "blind_special_stats.csv"
+BLIND_NUMBER_STATS_FILE_NAME = "blind_number_stats.csv"
+BLIND_TYPING_STATS_FILE_HEADER = (
+    "timestamp;wpm;typed_characters;duration_seconds;completed;"
+    f"{END_ERROR_PERCENTAGE_COLUMN};{TRAINING_FLAG_COLUMN}"
+)
+BLIND_LETTER_STATS_FILE_HEADER = (
+    "timestamp;letters_per_minute;typed_letters;duration_seconds;completed;"
+    f"{END_ERROR_PERCENTAGE_COLUMN};{TRAINING_FLAG_COLUMN}"
+)
+BLIND_SPECIAL_STATS_FILE_HEADER = (
+    "timestamp;symbols_per_minute;typed_symbols;duration_seconds;completed;"
+    f"{END_ERROR_PERCENTAGE_COLUMN};{TRAINING_FLAG_COLUMN}"
+)
+BLIND_NUMBER_STATS_FILE_HEADER = (
+    "timestamp;digits_per_minute;typed_digits;duration_seconds;completed;"
+    f"{END_ERROR_PERCENTAGE_COLUMN};{TRAINING_FLAG_COLUMN}"
+)
 STATS_FILTER_OPTIONS = [
     ("regular_only", "Non-training runs"),
     ("training_only", "Training runs"),
@@ -104,6 +125,19 @@ STATS_FILTER_LABEL_BY_KEY = {
 STATS_FILTER_KEY_BY_LABEL = {
     label: key for key, label in STATS_FILTER_OPTIONS
 }
+SUDDEN_DEATH_MODE_OPTIONS = [
+    ("standard", "Standard"),
+    ("sudden", "Sudden death"),
+    ("blind", "Blind mode"),
+]
+DEFAULT_SUDDEN_DEATH_MODE_KEY = "standard"
+SUDDEN_DEATH_MODE_LABEL_BY_KEY = {
+    key: label for key, label in SUDDEN_DEATH_MODE_OPTIONS
+}
+SUDDEN_DEATH_MODE_KEY_BY_LABEL = {
+    label: key for key, label in SUDDEN_DEATH_MODE_OPTIONS
+}
+BLIND_CURSOR_TAG = "blind_cursor"
 DEFAULT_FONT_FAMILY = "Courier New"
 DEFAULT_FONT_SIZE = 12
 MIN_FONT_SIZE = 6
@@ -141,7 +175,9 @@ LIGHT_THEME = {
     "border": "#c0c0c0",
     "titlebar_color": "#f1f1f1",
     "titlebar_text": "#111111",
-    "titlebar_border": "#c0c0c0"
+    "titlebar_border": "#c0c0c0",
+    "blind_highlight": "#d0d0d0",
+    "blind_mask_foreground": "#ffffff",
 }
 DARK_THEME = {
     "background": "#121212",
@@ -161,7 +197,9 @@ DARK_THEME = {
     "border": "#3a3a3a",
     "titlebar_color": "#1f1f1f",
     "titlebar_text": "#f4f4f4",
-    "titlebar_border": "#333333"
+    "titlebar_border": "#333333",
+    "blind_highlight": "#555555",
+    "blind_mask_foreground": "#1f1f1f",
 }
 
 PLOT_LIGHT_THEME = {
@@ -381,6 +419,18 @@ class TypingTrainerApp:
         self.sudden_death_number_stats_file_path: Path = get__file_path(
             SUDDEN_DEATH_NUMBER_STATS_FILE_NAME
         )
+        self.blind_typing_stats_file_path: Path = get__file_path(
+            BLIND_TYPING_STATS_FILE_NAME
+        )
+        self.blind_letter_stats_file_path: Path = get__file_path(
+            BLIND_LETTER_STATS_FILE_NAME
+        )
+        self.blind_special_stats_file_path: Path = get__file_path(
+            BLIND_SPECIAL_STATS_FILE_NAME
+        )
+        self.blind_number_stats_file_path: Path = get__file_path(
+            BLIND_NUMBER_STATS_FILE_NAME
+        )
 
         self.current_font_size: int = DEFAULT_FONT_SIZE
         self.text_font: tkfont.Font | None = None
@@ -409,6 +459,9 @@ class TypingTrainerApp:
         self.number_total_digits: int = 0
         self.number_errors: int = 0
         self.number_correct_digits: int = 0
+        self.letter_input_history: List[str] = []
+        self.special_input_history: List[str] = []
+        self.number_input_history: List[str] = []
         self.last_session_mode: str = "typing"
         self.style = ttk.Style()
         self.dark_mode_enabled: bool = self._detect_system_dark_mode()
@@ -416,7 +469,15 @@ class TypingTrainerApp:
             master=self.master,
             value=self.dark_mode_enabled
         )
-        self.sudden_death_var = tk.BooleanVar(master=self.master, value=False)
+        self.sudden_death_enabled: bool = False
+        default_sd_mode_label = SUDDEN_DEATH_MODE_LABEL_BY_KEY[
+            DEFAULT_SUDDEN_DEATH_MODE_KEY
+        ]
+        self.sudden_death_mode_var = tk.StringVar(
+            master=self.master,
+            value=default_sd_mode_label
+        )
+        self.active_mode_key = DEFAULT_SUDDEN_DEATH_MODE_KEY
         self.training_run_var = tk.BooleanVar(master=self.master, value=False)
         default_filter_label = STATS_FILTER_LABEL_BY_KEY[DEFAULT_STATS_FILTER_KEY]
         self.stats_filter_var = tk.StringVar(
@@ -424,7 +485,9 @@ class TypingTrainerApp:
             value=default_filter_label
         )
         self.sudden_death_failure_triggered: bool = False
+        self.blind_reveal_active: bool = False
         self._title_bar_refresh_job: str | None = None
+        self.sudden_death_mode_combobox: ttk.Combobox | None = None
 
         self._build_gui()
         self._schedule_generator_warmup()
@@ -506,6 +569,7 @@ class TypingTrainerApp:
         top_right_frame.columnconfigure(3, weight=0)
         top_right_frame.columnconfigure(4, weight=0)
         top_right_frame.columnconfigure(5, weight=0)
+        top_right_frame.columnconfigure(6, weight=0)
 
         self.info_label = ttk.Label(
             top_right_frame,
@@ -544,13 +608,23 @@ class TypingTrainerApp:
             command=self.toggle_dark_mode
         )
         self.dark_mode_toggle.grid(row=0, column=4, padx=(10, 0), sticky="e")
-        self.sudden_death_toggle = ttk.Checkbutton(
+        sudden_death_mode_values = [
+            label for _, label in SUDDEN_DEATH_MODE_OPTIONS
+        ]
+        sd_mode_label = ttk.Label(top_right_frame, text="Mode:")
+        sd_mode_label.grid(row=0, column=5, padx=(10, 0), sticky="e")
+        self.sudden_death_mode_combobox = ttk.Combobox(
             top_right_frame,
-            text="Sudden death",
-            variable=self.sudden_death_var,
-            command=self.on_sudden_death_toggle
+            textvariable=self.sudden_death_mode_var,
+            values=sudden_death_mode_values,
+            state="readonly",
+            width=12
         )
-        self.sudden_death_toggle.grid(row=0, column=5, padx=(10, 0), sticky="e")
+        self.sudden_death_mode_combobox.grid(row=0, column=6, padx=(5, 0), sticky="e")
+        self.sudden_death_mode_combobox.bind(
+            "<<ComboboxSelected>>",
+            self.on_sudden_death_mode_change
+        )
 
         self.wpm_label = ttk.Label(
             right_frame,
@@ -812,14 +886,57 @@ class TypingTrainerApp:
         """
         Return True if the sudden death toggle is enabled.
         """
-        return bool(self.sudden_death_var.get())
+        return self.sudden_death_enabled
 
-    def on_sudden_death_toggle(self) -> None:
+    def _get_sudden_death_mode_key(self) -> str:
         """
-        React to sudden death activation by resetting the current session.
+        Return the internal key of the currently selected sudden death sub-mode.
         """
-        enabled = self.is_sudden_death_active()
+        label = self.sudden_death_mode_var.get()
+        return SUDDEN_DEATH_MODE_KEY_BY_LABEL.get(
+            label,
+            DEFAULT_SUDDEN_DEATH_MODE_KEY
+        )
+
+    def is_blind_mode_active(self) -> bool:
+        """
+        Return True when sudden death is enabled and blind mode is selected.
+        """
+        return self._get_sudden_death_mode_key() == "blind"
+
+    def on_sudden_death_mode_change(self, event: tk.Event | None = None) -> None:
+        """
+        Update UI aspects when the sudden death sub-mode changes.
+        """
+        previous_mode = self.active_mode_key
+        mode_key = self._get_sudden_death_mode_key()
+        should_enable_sudden = mode_key == "sudden"
+        if should_enable_sudden != self.sudden_death_enabled:
+            self._apply_sudden_death_state(should_enable_sudden)
+        elif mode_key != previous_mode:
+            self.reset_session(clear_display=False)
+        self.active_mode_key = mode_key
+        if mode_key == "blind":
+            self.info_label.configure(
+                text="Blind mode enabled. Load a text or start a mode."
+            )
+        elif mode_key == "standard" and not self.is_sudden_death_active():
+            self.info_label.configure(
+                text="Standard mode active. Load a text or start a mode."
+            )
+        self._update_input_visibility()
+        self._update_blind_target_indicator()
+
+    def _apply_sudden_death_state(self, enabled: bool) -> None:
+        """
+        Apply visual and state changes when sudden death mode toggles.
+        """
+        if self.sudden_death_enabled == enabled:
+            return
+        self.sudden_death_enabled = enabled
         self.reset_session(clear_display=False)
+        self._update_input_visibility()
+        self._update_blind_target_indicator()
         if enabled:
             self.info_label.configure(
                 text="Sudden death enabled. Load a text or start a mode."
@@ -828,6 +945,99 @@ class TypingTrainerApp:
             self.info_label.configure(
                 text="Sudden death disabled. Normal sessions restored."
             )
+
+    def _update_input_visibility(self) -> None:
+        """
+        Hide or show the input text contents depending on blind mode.
+        """
+        theme = DARK_THEME if self.dark_mode_enabled else LIGHT_THEME
+        if self.is_blind_mode_active():
+            if self.blind_reveal_active:
+                self.input_text.configure(foreground=theme["input_foreground"])
+            else:
+                mask_color = theme.get(
+                    "blind_mask_foreground",
+                    theme["input_background"]
+                )
+                self.input_text.configure(foreground=mask_color)
+        else:
+            self.input_text.configure(foreground=theme["input_foreground"])
+
+    def _update_blind_target_indicator(self, typed_length: int | None = None) -> None:
+        """
+        Highlight the current target character while typing blindly.
+        """
+        self.display_text.configure(state="normal")
+        self.display_text.tag_remove(BLIND_CURSOR_TAG, "1.0", tk.END)
+        if (
+            not self.is_blind_mode_active()
+            or self.is_letter_mode
+            or self.is_special_mode
+            or self.is_number_mode
+            or not self.target_text
+        ):
+            self.display_text.configure(state="disabled")
+            return
+        if typed_length is None:
+            typed_length = len(self.input_text.get("1.0", "end-1c"))
+        if typed_length >= len(self.target_text):
+            self.display_text.configure(state="disabled")
+            return
+        start = f"1.0 + {typed_length} chars"
+        end = f"1.0 + {typed_length + 1} chars"
+        self.display_text.tag_add(BLIND_CURSOR_TAG, start, end)
+        self.display_text.configure(state="disabled")
+
+    def _show_blind_final_text(self, typed_text: str) -> None:
+        """
+        Reveal the typed text inside the input box with error highlighting.
+        """
+        if not self.is_blind_mode_active():
+            return
+
+        self.blind_reveal_active = True
+        self._update_input_visibility()
+
+        self._render_typed_text_with_errors(typed_text, self.target_text)
+
+    def _render_typed_text_with_errors(
+        self,
+        typed_text: str,
+        target_text: str
+    ) -> None:
+        """
+        Populate the input widget with typed text and highlight mismatches.
+        """
+        self.input_text.delete("1.0", tk.END)
+        self.input_text.tag_remove("error", "1.0", tk.END)
+
+        if not typed_text:
+            return
+
+        self.input_text.insert("1.0", typed_text)
+
+        for index, char in enumerate(typed_text):
+            target_char = target_text[index] if index < len(target_text) else ""
+            if char != target_char:
+                start = f"1.0 + {index} chars"
+                end = f"1.0 + {index + 1} chars"
+                self.input_text.tag_add("error", start, end)
+
+        self.input_text.see("end")
+
+    def _display_sequence_result(
+        self,
+        typed_text: str,
+        target_sequence: str
+    ) -> None:
+        """
+        Show the typed characters for single-character modes with errors marked.
+        """
+        if self.is_blind_mode_active() and not self.blind_reveal_active:
+            self.blind_reveal_active = True
+            self._update_input_visibility()
+
+        self._render_typed_text_with_errors(typed_text, target_sequence)
 
     def _apply_theme(self) -> None:
         """
@@ -903,6 +1113,11 @@ class TypingTrainerApp:
             foreground=theme["error_foreground"],
             background=theme["error_background"]
         )
+        self.display_text.tag_configure(
+            BLIND_CURSOR_TAG,
+            background=theme["blind_highlight"],
+            foreground=theme["text"]
+        )
         self.text_listbox.configure(
             background=theme["surface"],
             foreground=theme["text"],
@@ -914,6 +1129,8 @@ class TypingTrainerApp:
         )
         self._apply_title_bar_colors(theme)
         self._schedule_title_bar_refresh()
+        self._update_input_visibility()
+        self._update_blind_target_indicator()
 
     def _detect_system_dark_mode(self) -> bool:
         """
@@ -1500,6 +1717,7 @@ class TypingTrainerApp:
         self.display_text.delete("1.0", tk.END)
         self.display_text.insert("1.0", self.target_text)
         self.display_text.configure(state="disabled")
+        self._update_blind_target_indicator(0)
 
         self.info_label.configure(
             text="Start typing in the input area. WPM starts with the "
@@ -1548,6 +1766,11 @@ class TypingTrainerApp:
         self.special_errors = 0
         self.special_correct_chars = 0
 
+        self.letter_input_history = []
+        self.special_input_history = []
+        self.number_input_history = []
+        self.blind_reveal_active = False
+
         if exit_letter_mode:
             self.is_letter_mode = False
             self.letter_sequence = []
@@ -1576,6 +1799,8 @@ class TypingTrainerApp:
         if self.update_job_id is not None:
             self.master.after_cancel(self.update_job_id)
             self.update_job_id = None
+        self._update_input_visibility()
+        self._update_blind_target_indicator()
 
 
     def handle_reset_button(self) -> None:
@@ -1649,6 +1874,10 @@ class TypingTrainerApp:
         if not self.is_letter_mode:
             return
 
+        if (not self.is_sudden_death_active()) and event.keysym == "BackSpace":
+            if self._handle_letter_backspace():
+                return
+
         if self.letter_index >= self.letter_total_letters:
             return
 
@@ -1684,7 +1913,11 @@ class TypingTrainerApp:
         current_char = typed_text
         target_letter = self.letter_sequence[self.letter_index]
 
-        if current_char == target_letter:
+        is_correct = current_char == target_letter
+        advance_on_error = self.is_blind_mode_active()
+
+        if is_correct:
+            self.letter_input_history.append(current_char)
             self.letter_correct_letters += 1
             self.letter_index += 1
             self.input_text.delete("1.0", tk.END)
@@ -1702,12 +1935,52 @@ class TypingTrainerApp:
                 self.update_letter_status_label()
             return
 
+        # incorrect input
         self.letter_errors += 1
+
         if self.is_sudden_death_active():
             self.finish_letter_mode_session(sudden_death=True)
-        else:
+            return
+
+        if advance_on_error:
+            self.letter_input_history.append(current_char)
+            self.letter_index += 1
             self.input_text.delete("1.0", tk.END)
-            self.update_letter_status_label()
+            if self.letter_index >= self.letter_total_letters:
+                self.finish_letter_mode_session()
+            else:
+                self._update_letter_display()
+                self.update_letter_status_label()
+            return
+
+        self.input_text.delete("1.0", tk.END)
+        self.update_letter_status_label()
+
+    def _handle_letter_backspace(self) -> bool:
+        """
+        Allow undoing the last confirmed letter when not in sudden death mode.
+        """
+        if self.letter_index <= 0 or not self.letter_input_history:
+            return False
+
+        self.letter_index -= 1
+        last_char = self.letter_input_history.pop()
+        target_letter = (
+            self.letter_sequence[self.letter_index]
+            if self.letter_index < len(self.letter_sequence)
+            else ""
+        )
+        if last_char == target_letter:
+            if self.letter_correct_letters > 0:
+                self.letter_correct_letters -= 1
+        else:
+            if self.letter_errors > 0:
+                self.letter_errors -= 1
+
+        self.input_text.delete("1.0", tk.END)
+        self._update_letter_display()
+        self.update_letter_status_label()
+        return True
 
 
     def _update_letter_display(self) -> None:
@@ -1762,14 +2035,19 @@ class TypingTrainerApp:
         if self.is_sudden_death_active():
             progress = f"{self.letter_correct_letters} correct (no limit)"
         else:
-            progress = f"{self.letter_correct_letters}/{self.letter_total_letters}"
+            progress = f"{self.letter_index}/{self.letter_total_letters}"
+
+        if self.is_blind_mode_active():
+            error_text = "Errors: hidden"
+        else:
+            error_text = f"Errors: {self.letter_errors}"
 
         self.wpm_label.configure(
             text=(
                 f"Letter mode  |  Time: {elapsed_seconds:.1f} s  |  "
                 f"Letters/min: {letters_per_minute:.1f}  |  "
                 f"Progress: {progress}  |  "
-                f"Errors: {self.letter_errors}"
+                f"{error_text}"
             )
         )
 
@@ -1790,16 +2068,31 @@ class TypingTrainerApp:
                 letters_per_minute = self.letter_correct_letters / elapsed_minutes
 
         completed_sequence = self.letter_index >= self.letter_total_letters
+        typed_letters_text = "".join(self.letter_input_history)
+        typed_letters_count = len(typed_letters_text)
+        blind_end_error_percentage: float | None = None
+        if self.is_blind_mode_active() and typed_letters_count > 0:
+            if sudden_death:
+                total_targets = max(typed_letters_count, 1)
+            else:
+                total_targets = max(self.letter_total_letters, 1)
+            target_letters = "".join(self.letter_sequence[:total_targets])
+            blind_end_error_percentage = self._calculate_end_error_percentage(
+                target_letters,
+                typed_letters_text,
+                total_targets
+            )
 
         if sudden_death:
             correct_letters = self.letter_correct_letters
-            self.save_sudden_death_letter_result(
-                letters_per_minute,
-                correct_letters,
-                elapsed_seconds,
-                completed=completed_sequence,
-                is_training_run=self.training_run_var.get()
-            )
+            if not self.is_blind_mode_active():
+                self.save_sudden_death_letter_result(
+                    letters_per_minute,
+                    correct_letters,
+                    elapsed_seconds,
+                    completed=completed_sequence,
+                    is_training_run=self.training_run_var.get()
+                )
             if completed_sequence:
                 display_message = (
                     "Sudden death letter mode complete. "
@@ -1812,6 +2105,11 @@ class TypingTrainerApp:
                     f"Sudden death letter complete  |  Time: {elapsed_seconds:.1f} s  |  "
                     f"Letters/min: {letters_per_minute:.1f}  |  "
                     f"Correct letters: {correct_letters}"
+                    + (
+                        f"  |  End error %: {blind_end_error_percentage:.1f}"
+                        if blind_end_error_percentage is not None
+                        else ""
+                    )
                 )
             else:
                 display_message = (
@@ -1825,38 +2123,66 @@ class TypingTrainerApp:
                     f"Sudden death letter failed  |  Time: {elapsed_seconds:.1f} s  |  "
                     f"Letters/min: {letters_per_minute:.1f}  |  "
                     f"Correct letters: {correct_letters}"
+                    + (
+                        f"  |  End error %: {blind_end_error_percentage:.1f}"
+                        if blind_end_error_percentage is not None
+                        else ""
+                    )
                 )
         else:
             total_letters = max(self.letter_total_letters, 1)
             error_percentage = (self.letter_errors / total_letters) * 100.0
-            self.save_letter_result(
-                letters_per_minute,
-                error_percentage,
-                elapsed_seconds,
-                self.training_run_var.get()
-            )
+            if not self.is_blind_mode_active():
+                self.save_letter_result(
+                    letters_per_minute,
+                    error_percentage,
+                    elapsed_seconds,
+                    self.training_run_var.get()
+                )
             display_message = (
                 "Letter mode finished. Click 'Letter mode' to start again."
             )
             info_message = (
                 "Letter mode finished. Start a new run via the Letter mode button."
             )
+            if self.is_blind_mode_active():
+                if blind_end_error_percentage is not None:
+                    error_summary = (
+                        f"End error %: {blind_end_error_percentage:.1f}"
+                    )
+                else:
+                    error_summary = "Errors: hidden"
+            else:
+                error_summary = (
+                    f"Errors: {self.letter_errors}  |  "
+                    f"Error %: {error_percentage:.1f}"
+                )
             summary = (
                 f"Letter mode complete  |  Time: {elapsed_seconds:.1f} s  |  "
                 f"Letters/min: {letters_per_minute:.1f}  |  "
-                f"Errors: {self.letter_errors}  |  "
-                f"Error %: {error_percentage:.1f}"
+                f"{error_summary}"
             )
+
+        target_letters_for_display = "".join(
+            self.letter_sequence[:len(typed_letters_text)]
+        )
 
         self.display_text.configure(state="normal")
         self.display_text.delete("1.0", tk.END)
-        self.display_text.insert("1.0", display_message)
+        display_content = (
+            f"{display_message}\n\nTarget sequence:\n{target_letters_for_display}"
+        )
+        self.display_text.insert("1.0", display_content)
         self.display_text.configure(state="disabled")
 
         self.info_label.configure(text=info_message)
         self.wpm_label.configure(text=summary)
 
-        self.input_text.delete("1.0", tk.END)
+        self._display_sequence_result(
+            typed_letters_text,
+            target_letters_for_display
+        )
+
         self.is_letter_mode = False
         self.start_time = None
         self.letter_sequence = []
@@ -1864,7 +2190,18 @@ class TypingTrainerApp:
         self.letter_total_letters = 0
         self.letter_errors = 0
         self.letter_correct_letters = 0
+        self.letter_input_history = []
         self.last_session_mode = "letter"
+
+        if blind_end_error_percentage is not None:
+            self.save_blind_letter_result(
+                letters_per_minute=letters_per_minute,
+                typed_letters=typed_letters_count,
+                duration_seconds=elapsed_seconds,
+                completed=completed_sequence if sudden_death else True,
+                end_error_percentage=blind_end_error_percentage,
+                is_training_run=self.training_run_var.get()
+            )
 
 
     def start_special_mode(self) -> None:
@@ -1916,6 +2253,10 @@ class TypingTrainerApp:
         if not self.is_special_mode:
             return
 
+        if (not self.is_sudden_death_active()) and event.keysym == "BackSpace":
+            if self._handle_special_backspace():
+                return
+
         if self.special_index >= self.special_total_chars:
             return
 
@@ -1949,7 +2290,11 @@ class TypingTrainerApp:
         current_char = typed_text
         target_symbol = self.special_sequence[self.special_index]
 
-        if current_char == target_symbol:
+        is_correct = current_char == target_symbol
+        advance_on_error = self.is_blind_mode_active()
+
+        if is_correct:
+            self.special_input_history.append(current_char)
             self.special_correct_chars += 1
             self.special_index += 1
             self.input_text.delete("1.0", tk.END)
@@ -1967,12 +2312,51 @@ class TypingTrainerApp:
                 self.update_special_status_label()
             return
 
+        # incorrect input
         self.special_errors += 1
+
         if self.is_sudden_death_active():
             self.finish_special_mode_session(sudden_death=True)
-        else:
+            return
+
+        if advance_on_error:
+            self.special_input_history.append(current_char)
+            self.special_index += 1
             self.input_text.delete("1.0", tk.END)
-            self.update_special_status_label()
+            if self.special_index >= self.special_total_chars:
+                self.finish_special_mode_session()
+            else:
+                self._update_special_display()
+                self.update_special_status_label()
+            return
+
+        self.input_text.delete("1.0", tk.END)
+        self.update_special_status_label()
+
+    def _handle_special_backspace(self) -> bool:
+        """
+        Allow undoing the last confirmed symbol when not in sudden death mode.
+        """
+        if self.special_index <= 0 or not self.special_input_history:
+            return False
+
+        self.special_index -= 1
+        last_char = self.special_input_history.pop()
+        target_symbol = (
+            self.special_sequence[self.special_index]
+            if self.special_index < len(self.special_sequence)
+            else ""
+        )
+        if last_char == target_symbol:
+            if self.special_correct_chars > 0:
+                self.special_correct_chars -= 1
+        else:
+            if self.special_errors > 0:
+                self.special_errors -= 1
+        self.input_text.delete("1.0", tk.END)
+        self._update_special_display()
+        self.update_special_status_label()
+        return True
 
     def _update_special_display(self) -> None:
         """
@@ -2024,14 +2408,19 @@ class TypingTrainerApp:
         if self.is_sudden_death_active():
             progress = f"{self.special_correct_chars} correct (no limit)"
         else:
-            progress = f"{self.special_correct_chars}/{self.special_total_chars}"
+            progress = f"{self.special_index}/{self.special_total_chars}"
+
+        if self.is_blind_mode_active():
+            error_text = "Errors: hidden"
+        else:
+            error_text = f"Errors: {self.special_errors}"
 
         self.wpm_label.configure(
             text=(
                 f"Special char mode  |  Time: {elapsed_seconds:.1f} s  |  "
                 f"Symbols/min: {symbols_per_minute:.1f}  |  "
                 f"Progress: {progress}  |  "
-                f"Errors: {self.special_errors}"
+                f"{error_text}"
             )
         )
 
@@ -2051,16 +2440,31 @@ class TypingTrainerApp:
                 symbols_per_minute = self.special_correct_chars / elapsed_minutes
 
         completed_sequence = self.special_index >= self.special_total_chars
+        typed_symbols_text = "".join(self.special_input_history)
+        typed_symbols_count = len(typed_symbols_text)
+        blind_end_error_percentage: float | None = None
+        if self.is_blind_mode_active() and typed_symbols_count > 0:
+            if sudden_death:
+                total_targets = max(typed_symbols_count, 1)
+            else:
+                total_targets = max(self.special_total_chars, 1)
+            target_symbols = "".join(self.special_sequence[:total_targets])
+            blind_end_error_percentage = self._calculate_end_error_percentage(
+                target_symbols,
+                typed_symbols_text,
+                total_targets
+            )
 
         if sudden_death:
             correct_symbols = self.special_correct_chars
-            self.save_sudden_death_special_result(
-                symbols_per_minute,
-                correct_symbols,
-                elapsed_seconds,
-                completed=completed_sequence,
-                is_training_run=self.training_run_var.get()
-            )
+            if not self.is_blind_mode_active():
+                self.save_sudden_death_special_result(
+                    symbols_per_minute,
+                    correct_symbols,
+                    elapsed_seconds,
+                    completed=completed_sequence,
+                    is_training_run=self.training_run_var.get()
+                )
             if completed_sequence:
                 display_message = (
                     "Sudden death special mode complete. "
@@ -2073,6 +2477,11 @@ class TypingTrainerApp:
                     f"Sudden death special complete  |  Time: {elapsed_seconds:.1f} s  |  "
                     f"Symbols/min: {symbols_per_minute:.1f}  |  "
                     f"Correct symbols: {correct_symbols}"
+                    + (
+                        f"  |  End error %: {blind_end_error_percentage:.1f}"
+                        if blind_end_error_percentage is not None
+                        else ""
+                    )
                 )
             else:
                 display_message = (
@@ -2086,38 +2495,66 @@ class TypingTrainerApp:
                     f"Sudden death special failed  |  Time: {elapsed_seconds:.1f} s  |  "
                     f"Symbols/min: {symbols_per_minute:.1f}  |  "
                     f"Correct symbols: {correct_symbols}"
+                    + (
+                        f"  |  End error %: {blind_end_error_percentage:.1f}"
+                        if blind_end_error_percentage is not None
+                        else ""
+                    )
                 )
         else:
             total_symbols = max(self.special_total_chars, 1)
             error_percentage = (self.special_errors / total_symbols) * 100.0
-            self.save_special_result(
-                symbols_per_minute,
-                error_percentage,
-                elapsed_seconds,
-                self.training_run_var.get()
-            )
+            if not self.is_blind_mode_active():
+                self.save_special_result(
+                    symbols_per_minute,
+                    error_percentage,
+                    elapsed_seconds,
+                    self.training_run_var.get()
+                )
             display_message = (
                 "Special character mode finished. Click 'Special char mode' to start again."
             )
             info_message = (
                 "Special character mode finished. Start a new run via the Special char mode button."
             )
+            if self.is_blind_mode_active():
+                if blind_end_error_percentage is not None:
+                    error_summary = (
+                        f"End error %: {blind_end_error_percentage:.1f}"
+                    )
+                else:
+                    error_summary = "Errors: hidden"
+            else:
+                error_summary = (
+                    f"Errors: {self.special_errors}  |  "
+                    f"Error %: {error_percentage:.1f}"
+                )
             summary = (
                 f"Special mode complete  |  Time: {elapsed_seconds:.1f} s  |  "
                 f"Symbols/min: {symbols_per_minute:.1f}  |  "
-                f"Errors: {self.special_errors}  |  "
-                f"Error %: {error_percentage:.1f}"
+                f"{error_summary}"
             )
+
+        target_symbols_for_display = "".join(
+            self.special_sequence[:len(typed_symbols_text)]
+        )
 
         self.display_text.configure(state="normal")
         self.display_text.delete("1.0", tk.END)
-        self.display_text.insert("1.0", display_message)
+        display_content = (
+            f"{display_message}\n\nTarget sequence:\n{target_symbols_for_display}"
+        )
+        self.display_text.insert("1.0", display_content)
         self.display_text.configure(state="disabled")
 
         self.info_label.configure(text=info_message)
         self.wpm_label.configure(text=summary)
 
-        self.input_text.delete("1.0", tk.END)
+        self._display_sequence_result(
+            typed_symbols_text,
+            target_symbols_for_display
+        )
+
         self.is_special_mode = False
         self.start_time = None
         self.special_sequence = []
@@ -2125,7 +2562,18 @@ class TypingTrainerApp:
         self.special_total_chars = 0
         self.special_errors = 0
         self.special_correct_chars = 0
+        self.special_input_history = []
         self.last_session_mode = "special"
+
+        if blind_end_error_percentage is not None:
+            self.save_blind_special_result(
+                symbols_per_minute=symbols_per_minute,
+                typed_symbols=typed_symbols_count,
+                duration_seconds=elapsed_seconds,
+                completed=completed_sequence if sudden_death else True,
+                end_error_percentage=blind_end_error_percentage,
+                is_training_run=self.training_run_var.get()
+            )
 
 
     def start_number_mode(self) -> None:
@@ -2178,6 +2626,10 @@ class TypingTrainerApp:
         if not self.is_number_mode:
             return
 
+        if (not self.is_sudden_death_active()) and event.keysym == "BackSpace":
+            if self._handle_number_backspace():
+                return
+
         if self.number_index >= self.number_total_digits:
             return
 
@@ -2212,7 +2664,11 @@ class TypingTrainerApp:
         current_char = typed_text
         target_digit = self.number_sequence[self.number_index]
 
-        if current_char == target_digit:
+        is_correct = current_char == target_digit
+        advance_on_error = self.is_blind_mode_active()
+
+        if is_correct:
+            self.number_input_history.append(current_char)
             self.number_correct_digits += 1
             self.number_index += 1
             self.input_text.delete("1.0", tk.END)
@@ -2230,13 +2686,51 @@ class TypingTrainerApp:
                 self.update_number_status_label()
             return
 
+        # incorrect input
         self.number_errors += 1
+
         if self.is_sudden_death_active():
             self.finish_number_mode_session(sudden_death=True)
-        else:
-            self.input_text.delete("1.0", tk.END)
-            self.update_number_status_label()
+            return
 
+        if advance_on_error:
+            self.number_input_history.append(current_char)
+            self.number_index += 1
+            self.input_text.delete("1.0", tk.END)
+            if self.number_index >= self.number_total_digits:
+                self.finish_number_mode_session()
+            else:
+                self._update_number_display()
+                self.update_number_status_label()
+            return
+
+        self.input_text.delete("1.0", tk.END)
+        self.update_number_status_label()
+
+    def _handle_number_backspace(self) -> bool:
+        """
+        Allow undoing the last confirmed digit when not in sudden death mode.
+        """
+        if self.number_index <= 0 or not self.number_input_history:
+            return False
+
+        self.number_index -= 1
+        last_char = self.number_input_history.pop()
+        target_digit = (
+            self.number_sequence[self.number_index]
+            if self.number_index < len(self.number_sequence)
+            else ""
+        )
+        if last_char == target_digit:
+            if self.number_correct_digits > 0:
+                self.number_correct_digits -= 1
+        else:
+            if self.number_errors > 0:
+                self.number_errors -= 1
+        self.input_text.delete("1.0", tk.END)
+        self._update_number_display()
+        self.update_number_status_label()
+        return True
 
     def _update_number_display(self) -> None:
         """
@@ -2289,14 +2783,19 @@ class TypingTrainerApp:
         if self.is_sudden_death_active():
             progress = f"{self.number_correct_digits} correct (no limit)"
         else:
-            progress = f"{self.number_correct_digits}/{self.number_total_digits}"
+            progress = f"{self.number_index}/{self.number_total_digits}"
+
+        if self.is_blind_mode_active():
+            error_text = "Errors: hidden"
+        else:
+            error_text = f"Errors: {self.number_errors}"
 
         self.wpm_label.configure(
             text=(
                 f"Number mode  |  Time: {elapsed_seconds:.1f} s  |  "
                 f"Digits/min: {digits_per_minute:.1f}  |  "
                 f"Progress: {progress}  |  "
-                f"Errors: {self.number_errors}"
+                f"{error_text}"
             )
         )
 
@@ -2317,16 +2816,31 @@ class TypingTrainerApp:
                 digits_per_minute = self.number_correct_digits / elapsed_minutes
 
         completed_sequence = self.number_index >= self.number_total_digits
+        typed_digits_text = "".join(self.number_input_history)
+        typed_digits_count = len(typed_digits_text)
+        blind_end_error_percentage: float | None = None
+        if self.is_blind_mode_active() and typed_digits_count > 0:
+            if sudden_death:
+                total_targets = max(typed_digits_count, 1)
+            else:
+                total_targets = max(self.number_total_digits, 1)
+            target_digits = "".join(self.number_sequence[:total_targets])
+            blind_end_error_percentage = self._calculate_end_error_percentage(
+                target_digits,
+                typed_digits_text,
+                total_targets
+            )
 
         if sudden_death:
             correct_digits = self.number_correct_digits
-            self.save_sudden_death_number_result(
-                digits_per_minute,
-                correct_digits,
-                elapsed_seconds,
-                completed=completed_sequence,
-                is_training_run=self.training_run_var.get()
-            )
+            if not self.is_blind_mode_active():
+                self.save_sudden_death_number_result(
+                    digits_per_minute,
+                    correct_digits,
+                    elapsed_seconds,
+                    completed=completed_sequence,
+                    is_training_run=self.training_run_var.get()
+                )
             if completed_sequence:
                 display_message = (
                     "Sudden death number mode complete. "
@@ -2339,6 +2853,11 @@ class TypingTrainerApp:
                     f"Sudden death number complete  |  Time: {elapsed_seconds:.1f} s  |  "
                     f"Digits/min: {digits_per_minute:.1f}  |  "
                     f"Correct digits: {correct_digits}"
+                    + (
+                        f"  |  End error %: {blind_end_error_percentage:.1f}"
+                        if blind_end_error_percentage is not None
+                        else ""
+                    )
                 )
             else:
                 display_message = (
@@ -2352,38 +2871,66 @@ class TypingTrainerApp:
                     f"Sudden death number failed  |  Time: {elapsed_seconds:.1f} s  |  "
                     f"Digits/min: {digits_per_minute:.1f}  |  "
                     f"Correct digits: {correct_digits}"
+                    + (
+                        f"  |  End error %: {blind_end_error_percentage:.1f}"
+                        if blind_end_error_percentage is not None
+                        else ""
+                    )
                 )
         else:
             total_digits = max(self.number_total_digits, 1)
             error_percentage = (self.number_errors / total_digits) * 100.0
-            self.save_number_result(
-                digits_per_minute,
-                error_percentage,
-                elapsed_seconds,
-                self.training_run_var.get()
-            )
+            if not self.is_blind_mode_active():
+                self.save_number_result(
+                    digits_per_minute,
+                    error_percentage,
+                    elapsed_seconds,
+                    self.training_run_var.get()
+                )
             display_message = (
                 "Number mode finished. Click 'Number mode' to start again."
             )
             info_message = (
                 "Number mode finished. Start a new run via the Number mode button."
             )
+            if self.is_blind_mode_active():
+                if blind_end_error_percentage is not None:
+                    error_summary = (
+                        f"End error %: {blind_end_error_percentage:.1f}"
+                    )
+                else:
+                    error_summary = "Errors: hidden"
+            else:
+                error_summary = (
+                    f"Errors: {self.number_errors}  |  "
+                    f"Error %: {error_percentage:.1f}"
+                )
             summary = (
                 f"Number mode complete  |  Time: {elapsed_seconds:.1f} s  |  "
                 f"Digits/min: {digits_per_minute:.1f}  |  "
-                f"Errors: {self.number_errors}  |  "
-                f"Error %: {error_percentage:.1f}"
+                f"{error_summary}"
             )
+
+        target_digits_for_display = "".join(
+            self.number_sequence[:len(typed_digits_text)]
+        )
 
         self.display_text.configure(state="normal")
         self.display_text.delete("1.0", tk.END)
-        self.display_text.insert("1.0", display_message)
+        display_content = (
+            f"{display_message}\n\nTarget sequence:\n{target_digits_for_display}"
+        )
+        self.display_text.insert("1.0", display_content)
         self.display_text.configure(state="disabled")
 
         self.info_label.configure(text=info_message)
         self.wpm_label.configure(text=summary)
 
-        self.input_text.delete("1.0", tk.END)
+        self._display_sequence_result(
+            typed_digits_text,
+            target_digits_for_display
+        )
+
         self.is_number_mode = False
         self.start_time = None
         self.number_sequence = []
@@ -2391,7 +2938,18 @@ class TypingTrainerApp:
         self.number_total_digits = 0
         self.number_errors = 0
         self.number_correct_digits = 0
+        self.number_input_history = []
         self.last_session_mode = "number"
+
+        if blind_end_error_percentage is not None:
+            self.save_blind_number_result(
+                digits_per_minute=digits_per_minute,
+                typed_digits=typed_digits_count,
+                duration_seconds=elapsed_seconds,
+                completed=completed_sequence if sudden_death else True,
+                end_error_percentage=blind_end_error_percentage,
+                is_training_run=self.training_run_var.get()
+            )
 
 
     def on_key_press(self, event: tk.Event) -> None:
@@ -2454,6 +3012,8 @@ class TypingTrainerApp:
             return
 
         typed_text = self.input_text.get("1.0", "end-1c")
+        if self.is_blind_mode_active():
+            self._update_blind_target_indicator(len(typed_text))
 
         # First update cumulative error counter based on the change.
         self._update_error_counter(self.previous_text, typed_text)
@@ -2527,23 +3087,26 @@ class TypingTrainerApp:
         the current number of correct characters.
         """
         self.input_text.tag_remove("error", "1.0", tk.END)
+        show_error_tags = not self.is_blind_mode_active()
 
         correct = 0
         first_error_index: int | None = None
 
         for index, char in enumerate(typed_text):
             if index >= len(self.target_text):
-                start = f"1.0 + {index} chars"
-                end = f"1.0 + {index + 1} chars"
-                self.input_text.tag_add("error", start, end)
+                if show_error_tags:
+                    start = f"1.0 + {index} chars"
+                    end = f"1.0 + {index + 1} chars"
+                    self.input_text.tag_add("error", start, end)
                 if first_error_index is None:
                     first_error_index = index
                 continue
 
             if char != self.target_text[index]:
-                start = f"1.0 + {index} chars"
-                end = f"1.0 + {index + 1} chars"
-                self.input_text.tag_add("error", start, end)
+                if show_error_tags:
+                    start = f"1.0 + {index} chars"
+                    end = f"1.0 + {index + 1} chars"
+                    self.input_text.tag_add("error", start, end)
                 if first_error_index is None:
                     first_error_index = index
             else:
@@ -2551,6 +3114,29 @@ class TypingTrainerApp:
 
         self.correct_count = correct
         return first_error_index
+
+    @staticmethod
+    def _calculate_end_error_percentage(
+        target: str,
+        typed: str,
+        total_targets: int | None = None
+    ) -> float:
+        """
+        Compute the percentage of mismatched characters between target and typed text.
+        """
+        if total_targets is None:
+            total_targets = len(typed)
+        if total_targets <= 0:
+            return 0.0
+        wrong = 0
+        for index in range(total_targets):
+            target_char = target[index] if index < len(target) else ""
+            typed_char = typed[index] if index < len(typed) else ""
+            if typed_char != target_char:
+                wrong += 1
+        if len(typed) > total_targets:
+            wrong += len(typed) - total_targets
+        return (wrong / total_targets) * 100.0
 
     def handle_sudden_death_text_failure(self, failure_index: int) -> None:
         """
@@ -2566,6 +3152,7 @@ class TypingTrainerApp:
             self.master.after_cancel(self.update_job_id)
             self.update_job_id = None
 
+        typed_text = self.input_text.get("1.0", "end-1c")
         safe_index = max(0, min(failure_index, len(self.target_text)))
         elapsed_seconds = 0.0
         wpm = 0.0
@@ -2579,13 +3166,22 @@ class TypingTrainerApp:
         else:
             correct_segment = self.target_text[:safe_index]
 
-        self.save_sudden_death_wpm_result(
-            wpm,
-            safe_index,
-            elapsed_seconds,
-            completed=False,
-            is_training_run=self.training_run_var.get()
-        )
+        blind_end_error_percentage: float | None = None
+        if self.is_blind_mode_active():
+            blind_end_error_percentage = self._calculate_end_error_percentage(
+                self.target_text,
+                typed_text,
+                len(self.target_text)
+            )
+
+        if not self.is_blind_mode_active():
+            self.save_sudden_death_wpm_result(
+                wpm,
+                safe_index,
+                elapsed_seconds,
+                completed=False,
+                is_training_run=self.training_run_var.get()
+            )
 
         self.info_label.configure(
             text=(
@@ -2597,15 +3193,33 @@ class TypingTrainerApp:
             text=(
                 f"Sudden death  |  Time: {elapsed_seconds:.1f} s  |  "
                 f"Correct chars: {safe_index}  |  WPM: {wpm:.1f}"
+                + (
+                    f"  |  End error %: {blind_end_error_percentage:.1f}"
+                    if blind_end_error_percentage is not None
+                    else ""
+                )
             )
         )
+        if self.is_blind_mode_active():
+            self._update_blind_target_indicator(len(typed_text))
+            self._show_blind_final_text(typed_text)
+            self.save_blind_typing_result(
+                wpm=wpm,
+                typed_characters=len(typed_text),
+                duration_seconds=elapsed_seconds,
+                completed=False,
+                end_error_percentage=blind_end_error_percentage or 0.0,
+                is_training_run=self.training_run_var.get()
+            )
 
 
     def update_wpm(self, typed_text: str) -> None:
         if self.start_time is None:
-            self.wpm_label.configure(
-                text="Time: 0.0 s  |  WPM: 0.0  |  Errors: 0  |  Error %: 0.0"
-            )
+            if self.is_blind_mode_active():
+                text = "Time: 0.0 s  |  WPM: 0.0"
+            else:
+                text = "Time: 0.0 s  |  WPM: 0.0  |  Errors: 0  |  Error %: 0.0"
+            self.wpm_label.configure(text=text)
             return
 
         elapsed_seconds = max(time.time() - self.start_time, 0.0001)
@@ -2627,8 +3241,11 @@ class TypingTrainerApp:
             text=(
                 f"Time: {elapsed_seconds:.1f} s  |  "
                 f"WPM: {wpm:.1f}  |  "
-                f"Errors: {errors}  |  "
-                f"Error %: {error_percentage:.1f}"
+                + (
+                    "Errors: hidden  |  Error %: hidden"
+                    if self.is_blind_mode_active()
+                    else f"Errors: {errors}  |  Error %: {error_percentage:.1f}"
+                )
             )
         )
 
@@ -2640,8 +3257,15 @@ class TypingTrainerApp:
         Once the text is completed, the timer is stopped and the result is
         saved to the statistics file.
         """
-        if typed_text != self.target_text:
-            return
+        final_typed_text = typed_text
+        target_length = len(self.target_text)
+        if self.is_blind_mode_active():
+            if len(typed_text) < target_length:
+                return
+            typed_text = typed_text[:target_length]
+        else:
+            if typed_text != self.target_text:
+                return
 
         if self.start_time is None:
             return
@@ -2665,30 +3289,79 @@ class TypingTrainerApp:
         else:
             error_percentage = (errors / total) * 100.0
 
-        if self.is_sudden_death_active():
-            self.save_sudden_death_wpm_result(
-                wpm,
-                len(self.target_text),
-                elapsed_seconds,
-                completed=True,
-                is_training_run=self.training_run_var.get()
+        end_error_percentage: float | None = None
+        if self.is_blind_mode_active():
+            end_error_percentage = self._calculate_end_error_percentage(
+                self.target_text,
+                final_typed_text,
+                target_length
             )
+
+        if self.is_sudden_death_active():
+            if not self.is_blind_mode_active():
+                self.save_sudden_death_wpm_result(
+                    wpm,
+                    target_length,
+                    elapsed_seconds,
+                    completed=True,
+                    is_training_run=self.training_run_var.get()
+                )
             self.info_label.configure(
                 text="Sudden death complete. Start another run when ready."
             )
             self.wpm_label.configure(
                 text=(
                     f"Sudden death  |  Time: {elapsed_seconds:.1f} s  |  "
-                    f"WPM: {wpm:.1f}  |  Correct chars: {len(self.target_text)}"
+                    f"WPM: {wpm:.1f}  |  Correct chars: {target_length}"
+                    + (
+                        f"  |  End error %: {end_error_percentage:.1f}"
+                        if end_error_percentage is not None
+                        else ""
+                    )
                 )
             )
+            if self.is_blind_mode_active():
+                self._update_blind_target_indicator(target_length)
+                self._show_blind_final_text(final_typed_text)
+                self.save_blind_typing_result(
+                    wpm=wpm,
+                    typed_characters=len(final_typed_text),
+                    duration_seconds=elapsed_seconds,
+                    completed=True,
+                    end_error_percentage=end_error_percentage or 0.0,
+                    is_training_run=self.training_run_var.get()
+                )
         else:
-            self.save_wpm_result(
-                wpm,
-                error_percentage,
-                elapsed_seconds,
-                self.training_run_var.get()
-            )
+            if not self.is_blind_mode_active():
+                self.save_wpm_result(
+                    wpm,
+                    error_percentage,
+                    elapsed_seconds,
+                    self.training_run_var.get()
+                )
+            if self.is_blind_mode_active():
+                self._show_blind_final_text(final_typed_text)
+                self.save_blind_typing_result(
+                    wpm=wpm,
+                    typed_characters=len(final_typed_text),
+                    duration_seconds=elapsed_seconds,
+                    completed=True,
+                    end_error_percentage=end_error_percentage or 0.0,
+                    is_training_run=self.training_run_var.get()
+                )
+
+            if self.is_blind_mode_active():
+                summary = (
+                    f"Typing complete  |  Time: {elapsed_seconds:.1f} s  |  "
+                    f"WPM: {wpm:.1f}  |  End error %: {end_error_percentage or 0.0:.1f}"
+                )
+            else:
+                summary = (
+                    f"Typing complete  |  Time: {elapsed_seconds:.1f} s  |  "
+                    f"WPM: {wpm:.1f}  |  Errors: {errors}  |  "
+                    f"Error %: {error_percentage:.1f}"
+                )
+            self.wpm_label.configure(text=summary)
 
 
     def save_wpm_result(
@@ -2730,7 +3403,8 @@ class TypingTrainerApp:
         training_flag = "1" if is_training_run else "0"
         line = (
             f"{timestamp};{wpm:.3f};{correct_characters};"
-            f"{duration_seconds:.3f};{completed_flag};{training_flag}\n"
+            f"{duration_seconds:.3f};{completed_flag};"
+            f"{training_flag}\n"
         )
         ensure_stats_file_header(
             self.sudden_death_typing_stats_file_path,
@@ -2783,7 +3457,8 @@ class TypingTrainerApp:
         training_flag = "1" if is_training_run else "0"
         line = (
             f"{timestamp};{letters_per_minute:.3f};{correct_letters};"
-            f"{duration_seconds:.3f};{completed_flag};{training_flag}\n"
+            f"{duration_seconds:.3f};{completed_flag};"
+            f"{training_flag}\n"
         )
         ensure_stats_file_header(
             self.sudden_death_letter_stats_file_path,
@@ -2836,7 +3511,8 @@ class TypingTrainerApp:
         training_flag = "1" if is_training_run else "0"
         line = (
             f"{timestamp};{symbols_per_minute:.3f};{correct_symbols};"
-            f"{duration_seconds:.3f};{completed_flag};{training_flag}\n"
+            f"{duration_seconds:.3f};{completed_flag};"
+            f"{training_flag}\n"
         )
         ensure_stats_file_header(
             self.sudden_death_special_stats_file_path,
@@ -2889,7 +3565,8 @@ class TypingTrainerApp:
         training_flag = "1" if is_training_run else "0"
         line = (
             f"{timestamp};{digits_per_minute:.3f};{correct_digits};"
-            f"{duration_seconds:.3f};{completed_flag};{training_flag}\n"
+            f"{duration_seconds:.3f};{completed_flag};"
+            f"{training_flag}\n"
         )
         ensure_stats_file_header(
             self.sudden_death_number_stats_file_path,
@@ -2899,6 +3576,113 @@ class TypingTrainerApp:
             "a",
             encoding="utf-8"
         ) as file:
+            file.write(line)
+
+    def save_blind_typing_result(
+        self,
+        wpm: float,
+        typed_characters: int,
+        duration_seconds: float,
+        completed: bool,
+        end_error_percentage: float,
+        is_training_run: bool
+    ) -> None:
+        """
+        Store blind mode typing results with the final error percentage.
+        """
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        completed_flag = "1" if completed else "0"
+        training_flag = "1" if is_training_run else "0"
+        line = (
+            f"{timestamp};{wpm:.3f};{typed_characters};{duration_seconds:.3f};"
+            f"{completed_flag};{end_error_percentage:.3f};{training_flag}\n"
+        )
+        ensure_stats_file_header(
+            self.blind_typing_stats_file_path,
+            BLIND_TYPING_STATS_FILE_HEADER
+        )
+        with self.blind_typing_stats_file_path.open("a", encoding="utf-8") as file:
+            file.write(line)
+
+    def save_blind_letter_result(
+        self,
+        letters_per_minute: float,
+        typed_letters: int,
+        duration_seconds: float,
+        completed: bool,
+        end_error_percentage: float,
+        is_training_run: bool
+    ) -> None:
+        """
+        Store blind mode letter results including the end-error percentage.
+        """
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        completed_flag = "1" if completed else "0"
+        training_flag = "1" if is_training_run else "0"
+        line = (
+            f"{timestamp};{letters_per_minute:.3f};{typed_letters};"
+            f"{duration_seconds:.3f};{completed_flag};"
+            f"{end_error_percentage:.3f};{training_flag}\n"
+        )
+        ensure_stats_file_header(
+            self.blind_letter_stats_file_path,
+            BLIND_LETTER_STATS_FILE_HEADER
+        )
+        with self.blind_letter_stats_file_path.open("a", encoding="utf-8") as file:
+            file.write(line)
+
+    def save_blind_special_result(
+        self,
+        symbols_per_minute: float,
+        typed_symbols: int,
+        duration_seconds: float,
+        completed: bool,
+        end_error_percentage: float,
+        is_training_run: bool
+    ) -> None:
+        """
+        Store blind mode special-character results with final error data.
+        """
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        completed_flag = "1" if completed else "0"
+        training_flag = "1" if is_training_run else "0"
+        line = (
+            f"{timestamp};{symbols_per_minute:.3f};{typed_symbols};"
+            f"{duration_seconds:.3f};{completed_flag};"
+            f"{end_error_percentage:.3f};{training_flag}\n"
+        )
+        ensure_stats_file_header(
+            self.blind_special_stats_file_path,
+            BLIND_SPECIAL_STATS_FILE_HEADER
+        )
+        with self.blind_special_stats_file_path.open("a", encoding="utf-8") as file:
+            file.write(line)
+
+    def save_blind_number_result(
+        self,
+        digits_per_minute: float,
+        typed_digits: int,
+        duration_seconds: float,
+        completed: bool,
+        end_error_percentage: float,
+        is_training_run: bool
+    ) -> None:
+        """
+        Store blind mode number results with final error data.
+        """
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        completed_flag = "1" if completed else "0"
+        training_flag = "1" if is_training_run else "0"
+        line = (
+            f"{timestamp};{digits_per_minute:.3f};{typed_digits};"
+            f"{duration_seconds:.3f};{completed_flag};"
+            f"{end_error_percentage:.3f};{training_flag}\n"
+        )
+        ensure_stats_file_header(
+            self.blind_number_stats_file_path,
+            BLIND_NUMBER_STATS_FILE_HEADER
+        )
+        with self.blind_number_stats_file_path.open("a", encoding="utf-8") as file:
             file.write(line)
 
 
