@@ -15,7 +15,10 @@ import time
 import textwrap
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import List, TYPE_CHECKING
+from typing import Any, List, TYPE_CHECKING
+import ctypes
+from ctypes import wintypes
+import sys
 import threading
 
 import matplotlib.colors as mcolors
@@ -30,6 +33,21 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk, messagebox
 
+try:
+    import winreg
+except ImportError:
+    winreg = None
+
+GA_ROOT = 2
+WCA_USEDARKMODECOLORS = 26
+
+
+class WINDOWCOMPOSITIONATTRIBDATA(ctypes.Structure):
+    _fields_ = [
+        ("Attribute", ctypes.c_int),
+        ("Data", ctypes.c_void_p),
+        ("SizeOfData", ctypes.c_size_t)
+    ]
 
 GUI_WINDOW_XY = "1350x550"
 TEXT_FILE_NAME = "typing_texts.txt"
@@ -119,7 +137,10 @@ LIGHT_THEME = {
     "select_foreground": "#111111",
     "error_background": "#ffd6d6",
     "error_foreground": "#7a0000",
-    "border": "#c0c0c0"
+    "border": "#c0c0c0",
+    "titlebar_color": "#f1f1f1",
+    "titlebar_text": "#111111",
+    "titlebar_border": "#c0c0c0"
 }
 DARK_THEME = {
     "background": "#121212",
@@ -136,7 +157,70 @@ DARK_THEME = {
     "select_foreground": "#f4f4f4",
     "error_background": "#5c1b1b",
     "error_foreground": "#ffb4b4",
-    "border": "#3a3a3a"
+    "border": "#3a3a3a",
+    "titlebar_color": "#1f1f1f",
+    "titlebar_text": "#f4f4f4",
+    "titlebar_border": "#333333"
+}
+
+PLOT_LIGHT_THEME = {
+    "figure_facecolor": "#f5f5f5",
+    "axes_facecolor": "#ffffff",
+    "text_color": "#111111",
+    "spine_color": "#cbcbcb",
+    "grid_color": "#d8d8d8",
+    "hist_speed_color": "#3a7afe",
+    "hist_error_color": "#f59542",
+    "hist_correct_color": "#2ca58d",
+    "bar3d_color": "#4f6d7a",
+    "daily_speed_color": "#3a7afe",
+    "daily_error_color": "#f79646",
+    "daily_duration_color": "#2ca58d",
+    "time_per_day_bar_color": "#7fb3d5",
+    "time_cumulative_line_color": "#0d3b66",
+    "heatmap_low_color": "#ffffff",
+    "heatmap_high_color": "#0d3b66",
+    "heatmap_bad_color": "#f0f0f0",
+    "annotation_face_color": "#ffffff",
+    "annotation_edge_color": "#333333",
+    "annotation_text_color": "#111111",
+    "toolbar_background": "#e9e9e9",
+    "toolbar_button_background": "#d6d6d6",
+    "toolbar_button_active": "#c2c2c2",
+    "pie_mode_colors": ["#4f6d7a", "#7b8c5f", "#b7a57a", "#9a8c98"],
+    "pie_training_colors": ["#547c8c", "#a0606a"],
+    "legend_facecolor": "#ffffff",
+    "legend_edgecolor": "#cbcbcb"
+}
+
+PLOT_DARK_THEME = {
+    "figure_facecolor": "#0f1115",
+    "axes_facecolor": "#181b21",
+    "text_color": "#f5f5f5",
+    "spine_color": "#464a52",
+    "grid_color": "#30343c",
+    "hist_speed_color": "#64b5f6",
+    "hist_error_color": "#ffb74d",
+    "hist_correct_color": "#81c784",
+    "bar3d_color": "#5dade2",
+    "daily_speed_color": "#64b5f6",
+    "daily_error_color": "#ffb74d",
+    "daily_duration_color": "#81c784",
+    "time_per_day_bar_color": "#4f7cac",
+    "time_cumulative_line_color": "#ffd166",
+    "heatmap_low_color": "#121418",
+    "heatmap_high_color": "#26c6da",
+    "heatmap_bad_color": "#1b1f26",
+    "annotation_face_color": "#1f232a",
+    "annotation_edge_color": "#f5f5f5",
+    "annotation_text_color": "#f5f5f5",
+    "toolbar_background": "#1b1f26",
+    "toolbar_button_background": "#2c313c",
+    "toolbar_button_active": "#394152",
+    "pie_mode_colors": ["#64b5f6", "#81c784", "#ffd166", "#f28e85"],
+    "pie_training_colors": ["#26c6da", "#b39ddb"],
+    "legend_facecolor": "#1f232a",
+    "legend_edgecolor": "#555555"
 }
 
 
@@ -326,8 +410,11 @@ class TypingTrainerApp:
         self.number_correct_digits: int = 0
         self.last_session_mode: str = "typing"
         self.style = ttk.Style()
-        self.dark_mode_enabled: bool = False
-        self.dark_mode_var = tk.BooleanVar(master=self.master, value=False)
+        self.dark_mode_enabled: bool = self._detect_system_dark_mode()
+        self.dark_mode_var = tk.BooleanVar(
+            master=self.master,
+            value=self.dark_mode_enabled
+        )
         self.sudden_death_var = tk.BooleanVar(master=self.master, value=False)
         self.training_run_var = tk.BooleanVar(master=self.master, value=False)
         default_filter_label = STATS_FILTER_LABEL_BY_KEY[DEFAULT_STATS_FILTER_KEY]
@@ -336,6 +423,7 @@ class TypingTrainerApp:
             value=default_filter_label
         )
         self.sudden_death_failure_triggered: bool = False
+        self._title_bar_refresh_job: str | None = None
 
         self._build_gui()
         self._schedule_generator_warmup()
@@ -823,6 +911,308 @@ class TypingTrainerApp:
             highlightcolor=theme["accent"],
             activestyle="none"
         )
+        self._apply_title_bar_colors(theme)
+        self._schedule_title_bar_refresh()
+
+    def _detect_system_dark_mode(self) -> bool:
+        """
+        Return the OS default preference for app dark mode when available.
+        """
+        if sys.platform != "win32" or winreg is None:
+            return False
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+            ) as key:
+                value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+                return int(value) == 0
+        except OSError:
+            return False
+
+    def _get_plot_palette(self) -> dict[str, Any]:
+        """
+        Return the Matplotlib palette for the currently selected theme.
+        """
+        return PLOT_DARK_THEME if self.dark_mode_enabled else PLOT_LIGHT_THEME
+
+    def _apply_title_bar_colors(self, theme: dict[str, str]) -> None:
+        """
+        Ensure the root window's title bar matches the current theme.
+        """
+        try:
+            self.master.update_idletasks()
+        except tk.TclError:
+            pass
+        self._set_native_title_bar_theme(
+            self.master,
+            self.dark_mode_enabled,
+            {
+                "titlebar_color": theme["titlebar_color"],
+                "titlebar_text": theme["titlebar_text"],
+                "titlebar_border": theme["titlebar_border"]
+            }
+        )
+
+    def _schedule_title_bar_refresh(self) -> None:
+        """
+        Queue another title-bar sync once the window is fully realized.
+        """
+        if self._title_bar_refresh_job is not None:
+            try:
+                self.master.after_cancel(self._title_bar_refresh_job)
+            except tk.TclError:
+                pass
+        self._title_bar_refresh_job = self.master.after(
+            250,
+            self._refresh_title_bar_theme
+        )
+
+    def _refresh_title_bar_theme(self) -> None:
+        """
+        Callback that reapplies the theme to the title bar.
+        """
+        self._title_bar_refresh_job = None
+        theme = DARK_THEME if self.dark_mode_enabled else LIGHT_THEME
+        self._apply_title_bar_colors(theme)
+
+    @staticmethod
+    def _hex_to_colorref(color: str) -> int:
+        """
+        Convert a #RRGGBB color string into a Windows COLORREF integer.
+        """
+        color = color.lstrip("#")
+        if len(color) != 6:
+            return 0
+        red = int(color[0:2], 16)
+        green = int(color[2:4], 16)
+        blue = int(color[4:6], 16)
+        return (blue << 16) | (green << 8) | red
+
+    def _set_native_title_bar_theme(
+        self,
+        widget: tk.Misc | None,
+        dark: bool,
+        colors: dict[str, str] | None = None
+    ) -> None:
+        """
+        Attempt to align the OS-managed title bar with the current theme.
+
+        Windows exposes this through the DWM immersive dark mode flag. Other
+        platforms keep their default styling.
+        """
+        if widget is None or sys.platform != "win32":
+            return
+        try:
+            hwnd = widget.winfo_id()
+        except Exception:
+            return
+        try:
+            user32 = ctypes.windll.user32
+        except (AttributeError, OSError):
+            return
+        try:
+            ancestor = user32.GetAncestor(wintypes.HWND(hwnd), GA_ROOT)
+            if ancestor:
+                hwnd = ancestor
+        except Exception:
+            pass
+        dwmapi = None
+        try:
+            dwmapi = ctypes.windll.dwmapi
+        except (AttributeError, OSError):
+            pass
+        value = ctypes.c_int(1 if dark else 0)
+        hwnd_handle = wintypes.HWND(hwnd)
+        applied = False
+        if dwmapi is not None:
+            for attribute in (20, 19):  # Windows 11/10 attribute IDs
+                try:
+                    result = dwmapi.DwmSetWindowAttribute(
+                        hwnd_handle,
+                        ctypes.c_uint(attribute),
+                        ctypes.byref(value),
+                        ctypes.sizeof(value)
+                    )
+                    if result == 0:
+                        applied = True
+                        break
+                except Exception:
+                    continue
+            if applied and colors:
+                caption = wintypes.DWORD(
+                    self._hex_to_colorref(colors.get("titlebar_color", ""))
+                )
+                text_color = wintypes.DWORD(
+                    self._hex_to_colorref(colors.get("titlebar_text", ""))
+                )
+                border = wintypes.DWORD(
+                    self._hex_to_colorref(colors.get("titlebar_border", ""))
+                )
+                try:
+                    dwmapi.DwmSetWindowAttribute(
+                        hwnd_handle,
+                        ctypes.c_uint(35),  # DWMWA_CAPTION_COLOR
+                        ctypes.byref(caption),
+                        ctypes.sizeof(caption)
+                    )
+                    dwmapi.DwmSetWindowAttribute(
+                        hwnd_handle,
+                        ctypes.c_uint(36),  # DWMWA_TEXT_COLOR
+                        ctypes.byref(text_color),
+                        ctypes.sizeof(text_color)
+                    )
+                    dwmapi.DwmSetWindowAttribute(
+                        hwnd_handle,
+                        ctypes.c_uint(34),  # DWMWA_BORDER_COLOR
+                        ctypes.byref(border),
+                        ctypes.sizeof(border)
+                    )
+                except Exception:
+                    pass
+        if not applied:
+            try:
+                set_comp_attr = user32.SetWindowCompositionAttribute
+            except AttributeError:
+                set_comp_attr = None
+            if set_comp_attr:
+                try:
+                    data = WINDOWCOMPOSITIONATTRIBDATA()
+                    data.Attribute = WCA_USEDARKMODECOLORS
+                    data.Data = ctypes.cast(ctypes.byref(value), ctypes.c_void_p)
+                    data.SizeOfData = ctypes.sizeof(value)
+                    set_comp_attr(hwnd_handle, ctypes.byref(data))
+                except Exception:
+                    pass
+
+    def _apply_plot_theme(
+        self,
+        fig: plt.Figure,
+        palette: dict[str, Any]
+    ) -> None:
+        """
+        Apply the palette colors to figure, axes, ticks, and labels.
+        """
+        text_color = palette["text_color"]
+        fig.patch.set_facecolor(palette["figure_facecolor"])
+        for ax in fig.axes:
+            try:
+                ax.set_facecolor(palette["axes_facecolor"])
+            except Exception:
+                pass
+            ax.tick_params(colors=text_color)
+            if hasattr(ax, "xaxis"):
+                ax.xaxis.label.set_color(text_color)
+            if hasattr(ax, "yaxis"):
+                ax.yaxis.label.set_color(text_color)
+            if hasattr(ax, "zaxis"):
+                ax.zaxis.label.set_color(text_color)
+            for label in ax.get_xticklabels() + ax.get_yticklabels():
+                label.set_color(text_color)
+            if hasattr(ax, "get_zticklabels"):
+                for label in ax.get_zticklabels():
+                    label.set_color(text_color)
+            if hasattr(ax, "title"):
+                ax.title.set_color(text_color)
+            if hasattr(ax, "spines"):
+                for spine in ax.spines.values():
+                    spine.set_color(palette["spine_color"])
+            grid_lines = getattr(ax, "get_xgridlines", lambda: [])()
+            grid_lines += getattr(ax, "get_ygridlines", lambda: [])()
+            for line in grid_lines:
+                line.set_color(palette["grid_color"])
+        self._style_matplotlib_toolbar(fig, palette)
+
+    def _set_widget_colors(
+        self,
+        widget: tk.Misc | None,
+        *,
+        background: str,
+        foreground: str,
+        active_background: str | None = None
+    ) -> None:
+        """
+        Best-effort theming for Tk widgets that may be part of Matplotlib toolbars.
+        """
+        if widget is None:
+            return
+        for option in ("background", "bg"):
+            try:
+                widget.configure(**{option: background})
+                break
+            except tk.TclError:
+                continue
+        for option in ("foreground", "fg"):
+            try:
+                widget.configure(**{option: foreground})
+                break
+            except tk.TclError:
+                continue
+        if active_background is not None:
+            try:
+                widget.configure(activebackground=active_background)
+            except tk.TclError:
+                pass
+            try:
+                widget.configure(activeforeground=foreground)
+            except tk.TclError:
+                pass
+
+    def _style_matplotlib_toolbar(
+        self,
+        fig: plt.Figure,
+        palette: dict[str, Any]
+    ) -> None:
+        """
+        Apply theme colors to the Matplotlib toolbar and its containing window.
+        """
+        manager = getattr(fig.canvas, "manager", None)
+        if manager is None:
+            return
+        toolbar = getattr(manager, "toolbar", None)
+        if toolbar is not None:
+            self._set_widget_colors(
+                toolbar,
+                background=palette["toolbar_background"],
+                foreground=palette["text_color"]
+            )
+            for child in toolbar.winfo_children():
+                self._set_widget_colors(
+                    child,
+                    background=palette["toolbar_button_background"],
+                    foreground=palette["text_color"],
+                    active_background=palette["toolbar_button_active"]
+                )
+            message_label = getattr(toolbar, "_message_label", None)
+            self._set_widget_colors(
+                message_label,
+                background=palette["toolbar_background"],
+                foreground=palette["text_color"]
+            )
+        window = getattr(manager, "window", None)
+        if window is not None:
+            self._set_native_title_bar_theme(
+                window,
+                self.dark_mode_enabled,
+                {
+                    "titlebar_color": palette["axes_facecolor"],
+                    "titlebar_text": palette["text_color"],
+                    "titlebar_border": palette["spine_color"]
+                }
+            )
+
+    def _style_legend(self, legend, palette: dict[str, Any]) -> None:
+        """
+        Apply theme colors to a legend if it exists.
+        """
+        if legend is None:
+            return
+        frame = legend.get_frame()
+        if frame is not None:
+            frame.set_facecolor(palette["legend_facecolor"])
+            frame.set_edgecolor(palette["legend_edgecolor"])
+        for text in legend.get_texts():
+            text.set_color(palette["text_color"])
 
     def _configure_figure_window(self, fig: plt.Figure) -> None:
         """
@@ -2651,9 +3041,11 @@ class TypingTrainerApp:
                     daily_duration_minutes.append(0.0)
                 current_day += timedelta(days=1)
 
+        palette = self._get_plot_palette()
         fig = plt.figure(figsize=(12, 10))
         self._configure_figure_window(fig)
         grid_spec = fig.add_gridspec(4, 2, height_ratios=[1.0, 1.2, 1.0, 0.8])
+        grid_spec.update(hspace=0.75, wspace=0.4)
 
         ax_speed = fig.add_subplot(grid_spec[0, 0])
         ax_correct = fig.add_subplot(grid_spec[0, 1])
@@ -2662,13 +3054,25 @@ class TypingTrainerApp:
         ax_time_spent = fig.add_subplot(grid_spec[3, :])
         ax_time_spent_right = ax_time_spent.twinx()
 
-        ax_speed.hist(speed_values, bins="auto")
+        ax_speed.hist(
+            speed_values,
+            bins="auto",
+            color=palette["hist_speed_color"],
+            edgecolor=palette["axes_facecolor"],
+            alpha=0.85
+        )
         ax_speed.set_title(f"{speed_label} distribution")
         ax_speed.set_xlabel(speed_label)
         ax_speed.set_ylabel("Frequency")
 
         if correct_counts:
-            ax_correct.hist(correct_counts, bins="auto")
+            ax_correct.hist(
+                correct_counts,
+                bins="auto",
+                color=palette["hist_correct_color"],
+                edgecolor=palette["axes_facecolor"],
+                alpha=0.85
+            )
             ax_correct.set_title(f"{correct_label} distribution")
             ax_correct.set_xlabel(correct_label)
             ax_correct.set_ylabel("Frequency")
@@ -2680,7 +3084,8 @@ class TypingTrainerApp:
                 "No data available",
                 ha="center",
                 va="center",
-                transform=ax_correct.transAxes
+                transform=ax_correct.transAxes,
+                color=palette["text_color"]
             )
             ax_correct.set_xticks([])
             ax_correct.set_yticks([])
@@ -2728,7 +3133,8 @@ class TypingTrainerApp:
                     dx,
                     dy,
                     dz,
-                    shade=True
+                    shade=True,
+                    color=palette["bar3d_color"]
                 )
             else:
                 ax_3d.text(
@@ -2737,7 +3143,8 @@ class TypingTrainerApp:
                     0.5,
                     "No combined data available",
                     ha="center",
-                    va="center"
+                    va="center",
+                    color=palette["text_color"]
                 )
                 ax_3d.set_xticks([])
                 ax_3d.set_yticks([])
@@ -2749,7 +3156,8 @@ class TypingTrainerApp:
                 0.5,
                 "No combined data available",
                 ha="center",
-                va="center"
+                va="center",
+                color=palette["text_color"]
             )
             ax_3d.set_xticks([])
             ax_3d.set_yticks([])
@@ -2769,21 +3177,21 @@ class TypingTrainerApp:
                 positions - bar_width,
                 daily_speed,
                 width=bar_width,
-                color="#7ec8f8",
+                color=palette["daily_speed_color"],
                 label=f"Average {speed_short_label}"
             )
             ax_time.bar(
                 positions,
                 daily_correct,
                 width=bar_width,
-                color="#f7c59f",
+                color=palette["daily_error_color"],
                 label=f"Average {correct_label.lower()}"
             )
             ax_time.bar(
                 positions + bar_width,
                 daily_duration_minutes,
                 width=bar_width,
-                color="#a5d6a7",
+                color=palette["daily_duration_color"],
                 label="Total time (min)"
             )
             formatted_days = [day.strftime("%Y-%m-%d") for day in daily_dates]
@@ -2797,7 +3205,8 @@ class TypingTrainerApp:
             ax_time.set_title(
                 f"Daily averages ({speed_short_label} vs {correct_label.lower()})"
             )
-            ax_time.legend()
+            legend = ax_time.legend()
+            self._style_legend(legend, palette)
 
             cumulative_duration_minutes: List[float] = []
             running_total = 0.0
@@ -2809,14 +3218,16 @@ class TypingTrainerApp:
                 positions,
                 daily_duration_minutes,
                 width=0.4,
-                color="#bcd4e6",
+                color=palette["time_per_day_bar_color"],
                 label="Time per day (min)"
             )
             ax_time_spent_right.plot(
                 positions,
                 cumulative_duration_minutes,
-                color="#33658a",
+                color=palette["time_cumulative_line_color"],
                 marker="o",
+                markerfacecolor=palette["axes_facecolor"],
+                markeredgecolor=palette["time_cumulative_line_color"],
                 label="Cumulative time (min)"
             )
             ax_time_spent.set_xticks(positions)
@@ -2830,11 +3241,12 @@ class TypingTrainerApp:
             ax_time_spent.set_title("Time spent per day")
             handles, labels = ax_time_spent.get_legend_handles_labels()
             handles2, labels2 = ax_time_spent_right.get_legend_handles_labels()
-            ax_time_spent.legend(
+            legend = ax_time_spent.legend(
                 handles + handles2,
                 labels + labels2,
                 loc="upper left"
             )
+            self._style_legend(legend, palette)
         else:
             ax_time.set_title(
                 f"Daily averages ({speed_short_label} vs {correct_label.lower()})"
@@ -2845,7 +3257,8 @@ class TypingTrainerApp:
                 "No dated entries available",
                 ha="center",
                 va="center",
-                transform=ax_time.transAxes
+                transform=ax_time.transAxes,
+                color=palette["text_color"]
             )
             ax_time.set_xticks([])
             ax_time.set_yticks([])
@@ -2856,7 +3269,8 @@ class TypingTrainerApp:
                 "No dated entries available",
                 ha="center",
                 va="center",
-                transform=ax_time_spent.transAxes
+                transform=ax_time_spent.transAxes,
+                color=palette["text_color"]
             )
             ax_time_spent.set_xticks([])
             ax_time_spent.set_yticks([])
@@ -2866,9 +3280,9 @@ class TypingTrainerApp:
         ax_time_spent.yaxis.set_major_formatter(formatter)
         ax_time_spent_right.yaxis.set_major_formatter(formatter)
 
-        plt.tight_layout()
+        self._apply_plot_theme(fig, palette)
+        plt.tight_layout(pad=1.3)
         plt.show()
-
 
     def show_stats(self) -> None:
         """
@@ -3004,10 +3418,11 @@ class TypingTrainerApp:
                     daily_duration_minutes.append(0.0)
                 current_day += timedelta(days=1)
 
-        # Create a 3-row layout with the 3D and timeline plots spanning both columns
+        palette = self._get_plot_palette()
         fig = plt.figure(figsize=(12, 10))
         self._configure_figure_window(fig)
         grid_spec = fig.add_gridspec(4, 2, height_ratios=[1.0, 1.2, 1.0, 0.8])
+        grid_spec.update(hspace=0.75, wspace=0.4)
 
         ax_wpm = fig.add_subplot(grid_spec[0, 0])
         ax_error = fig.add_subplot(grid_spec[0, 1])
@@ -3016,15 +3431,25 @@ class TypingTrainerApp:
         ax_time_spent = fig.add_subplot(grid_spec[3, :])
         ax_time_spent_right = ax_time_spent.twinx()
 
-        # 1D histogram of WPM
-        ax_wpm.hist(wpm_values, bins="auto")
+        ax_wpm.hist(
+            wpm_values,
+            bins="auto",
+            color=palette["hist_speed_color"],
+            edgecolor=palette["axes_facecolor"],
+            alpha=0.85
+        )
         ax_wpm.set_title("WPM distribution")
         ax_wpm.set_xlabel("Words per minute")
         ax_wpm.set_ylabel("Frequency")
 
-        # 1D histogram of error percentage
         if error_rates:
-            ax_error.hist(error_rates, bins="auto")
+            ax_error.hist(
+                error_rates,
+                bins="auto",
+                color=palette["hist_error_color"],
+                edgecolor=palette["axes_facecolor"],
+                alpha=0.85
+            )
             ax_error.set_title("Error percentage distribution")
             ax_error.set_xlabel("Error percentage (%)")
             ax_error.set_ylabel("Frequency")
@@ -3036,12 +3461,12 @@ class TypingTrainerApp:
                 "No error-rate data available",
                 ha="center",
                 va="center",
-                transform=ax_error.transAxes
+                transform=ax_error.transAxes,
+                color=palette["text_color"]
             )
             ax_error.set_xticks([])
             ax_error.set_yticks([])
 
-        # 3D joint histogram of WPM vs error percentage
         if wpm_for_3d and error_for_3d:
             wpm_arr = np.asarray(wpm_for_3d, dtype=float)
             error_arr = np.asarray(error_for_3d, dtype=float)
@@ -3092,7 +3517,8 @@ class TypingTrainerApp:
                     dx,
                     dy,
                     dz,
-                    shade=True
+                    shade=True,
+                    color=palette["bar3d_color"]
                 )
                 ax_3d.set_title("Joint WPM / error percentage distribution")
                 ax_3d.set_xlabel("WPM")
@@ -3106,7 +3532,8 @@ class TypingTrainerApp:
                     0.5,
                     "No combined WPM/error data available",
                     ha="center",
-                    va="center"
+                    va="center",
+                    color=palette["text_color"]
                 )
                 ax_3d.set_xticks([])
                 ax_3d.set_yticks([])
@@ -3119,7 +3546,8 @@ class TypingTrainerApp:
                 0.5,
                 "No combined WPM/error data available",
                 ha="center",
-                va="center"
+                va="center",
+                color=palette["text_color"]
             )
             ax_3d.set_xticks([])
             ax_3d.set_yticks([])
@@ -3132,21 +3560,21 @@ class TypingTrainerApp:
                 positions - bar_width,
                 daily_wpm,
                 width=bar_width,
-                color="#7ec8f8",
+                color=palette["daily_speed_color"],
                 label="Average WPM"
             )
             ax_time.bar(
                 positions,
                 daily_error,
                 width=bar_width,
-                color="#f7c59f",
+                color=palette["daily_error_color"],
                 label="Average error %"
             )
             ax_time.bar(
                 positions + bar_width,
                 daily_duration_minutes,
                 width=bar_width,
-                color="#a5d6a7",
+                color=palette["daily_duration_color"],
                 label="Total time (min)"
             )
             formatted_days = [day.strftime("%Y-%m-%d") for day in daily_dates]
@@ -3158,7 +3586,8 @@ class TypingTrainerApp:
             )
             ax_time.set_ylabel("Daily averages / total time")
             ax_time.set_title("Daily averages (WPM vs error %)")
-            ax_time.legend()
+            legend = ax_time.legend()
+            self._style_legend(legend, palette)
 
             cumulative_duration_minutes: List[float] = []
             running_total = 0.0
@@ -3170,14 +3599,16 @@ class TypingTrainerApp:
                 positions,
                 daily_duration_minutes,
                 width=0.4,
-                color="#bcd4e6",
+                color=palette["time_per_day_bar_color"],
                 label="Time per day (min)"
             )
             ax_time_spent_right.plot(
                 positions,
                 cumulative_duration_minutes,
-                color="#33658a",
+                color=palette["time_cumulative_line_color"],
                 marker="o",
+                markerfacecolor=palette["axes_facecolor"],
+                markeredgecolor=palette["time_cumulative_line_color"],
                 label="Cumulative time (min)"
             )
             ax_time_spent.set_xticks(positions)
@@ -3191,11 +3622,12 @@ class TypingTrainerApp:
             ax_time_spent.set_title("Time spent per day")
             handles, labels = ax_time_spent.get_legend_handles_labels()
             handles2, labels2 = ax_time_spent_right.get_legend_handles_labels()
-            ax_time_spent.legend(
+            legend = ax_time_spent.legend(
                 handles + handles2,
                 labels + labels2,
                 loc="upper left"
             )
+            self._style_legend(legend, palette)
         else:
             ax_time.set_title("Daily averages (WPM vs error %)")
             ax_time.text(
@@ -3204,7 +3636,8 @@ class TypingTrainerApp:
                 "No dated entries available",
                 ha="center",
                 va="center",
-                transform=ax_time.transAxes
+                transform=ax_time.transAxes,
+                color=palette["text_color"]
             )
             ax_time.set_xticks([])
             ax_time.set_yticks([])
@@ -3215,18 +3648,20 @@ class TypingTrainerApp:
                 "No dated entries available",
                 ha="center",
                 va="center",
-                transform=ax_time_spent.transAxes
+                transform=ax_time_spent.transAxes,
+                color=palette["text_color"]
             )
             ax_time_spent.set_xticks([])
             ax_time_spent.set_yticks([])
             ax_time_spent_right.set_yticks([])
+
         formatter = mticker.FormatStrFormatter("%.1f")
         ax_time_spent.yaxis.set_major_formatter(formatter)
         ax_time_spent_right.yaxis.set_major_formatter(formatter)
 
-        plt.tight_layout()
+        self._apply_plot_theme(fig, palette)
+        plt.tight_layout(pad=1.3)
         plt.show()
-
 
     def show_letter_stats(self) -> None:
         """
@@ -3338,9 +3773,11 @@ class TypingTrainerApp:
                     daily_duration_minutes.append(0.0)
                 current_day += timedelta(days=1)
 
+        palette = self._get_plot_palette()
         fig = plt.figure(figsize=(12, 10))
         self._configure_figure_window(fig)
         grid_spec = fig.add_gridspec(4, 2, height_ratios=[1.0, 1.2, 1.0, 0.8])
+        grid_spec.update(hspace=0.75, wspace=0.4)
 
         ax_speed = fig.add_subplot(grid_spec[0, 0])
         ax_error = fig.add_subplot(grid_spec[0, 1])
@@ -3349,13 +3786,25 @@ class TypingTrainerApp:
         ax_time_spent = fig.add_subplot(grid_spec[3, :])
         ax_time_spent_right = ax_time_spent.twinx()
 
-        ax_speed.hist(letters_per_minute, bins="auto")
+        ax_speed.hist(
+            letters_per_minute,
+            bins="auto",
+            color=palette["hist_speed_color"],
+            edgecolor=palette["axes_facecolor"],
+            alpha=0.85
+        )
         ax_speed.set_title("Letters per minute distribution")
         ax_speed.set_xlabel("Letters per minute")
         ax_speed.set_ylabel("Frequency")
 
         if error_rates:
-            ax_error.hist(error_rates, bins="auto")
+            ax_error.hist(
+                error_rates,
+                bins="auto",
+                color=palette["hist_error_color"],
+                edgecolor=palette["axes_facecolor"],
+                alpha=0.85
+            )
             ax_error.set_title("Error percentage distribution")
             ax_error.set_xlabel("Error percentage (%)")
             ax_error.set_ylabel("Frequency")
@@ -3367,7 +3816,8 @@ class TypingTrainerApp:
                 "No error data available",
                 ha="center",
                 va="center",
-                transform=ax_error.transAxes
+                transform=ax_error.transAxes,
+                color=palette["text_color"]
             )
             ax_error.set_xticks([])
             ax_error.set_yticks([])
@@ -3422,7 +3872,8 @@ class TypingTrainerApp:
                     dx,
                     dy,
                     dz,
-                    shade=True
+                    shade=True,
+                    color=palette["bar3d_color"]
                 )
                 ax_3d.set_title("Joint letters/minute and error distribution")
                 ax_3d.set_xlabel("Letters per minute")
@@ -3436,7 +3887,8 @@ class TypingTrainerApp:
                     0.5,
                     "No combined data available",
                     ha="center",
-                    va="center"
+                    va="center",
+                    color=palette["text_color"]
                 )
                 ax_3d.set_xticks([])
                 ax_3d.set_yticks([])
@@ -3449,7 +3901,8 @@ class TypingTrainerApp:
                 0.5,
                 "No combined data available",
                 ha="center",
-                va="center"
+                va="center",
+                color=palette["text_color"]
             )
             ax_3d.set_xticks([])
             ax_3d.set_yticks([])
@@ -3462,21 +3915,21 @@ class TypingTrainerApp:
                 positions - bar_width,
                 daily_speed,
                 width=bar_width,
-                color="#7ec8f8",
+                color=palette["daily_speed_color"],
                 label="Average letters/min"
             )
             ax_time.bar(
                 positions,
                 daily_error,
                 width=bar_width,
-                color="#f7c59f",
+                color=palette["daily_error_color"],
                 label="Average error %"
             )
             ax_time.bar(
                 positions + bar_width,
                 daily_duration_minutes,
                 width=bar_width,
-                color="#a5d6a7",
+                color=palette["daily_duration_color"],
                 label="Total time (min)"
             )
             formatted_days = [day.strftime("%Y-%m-%d") for day in daily_dates]
@@ -3488,7 +3941,8 @@ class TypingTrainerApp:
             )
             ax_time.set_ylabel("Daily averages / total time")
             ax_time.set_title("Daily averages (letters/min vs error %)")
-            ax_time.legend()
+            legend = ax_time.legend()
+            self._style_legend(legend, palette)
 
             cumulative_duration_minutes: List[float] = []
             running_total = 0.0
@@ -3500,14 +3954,16 @@ class TypingTrainerApp:
                 positions,
                 daily_duration_minutes,
                 width=0.4,
-                color="#bcd4e6",
+                color=palette["time_per_day_bar_color"],
                 label="Time per day (min)"
             )
             ax_time_spent_right.plot(
                 positions,
                 cumulative_duration_minutes,
-                color="#33658a",
+                color=palette["time_cumulative_line_color"],
                 marker="o",
+                markerfacecolor=palette["axes_facecolor"],
+                markeredgecolor=palette["time_cumulative_line_color"],
                 label="Cumulative time (min)"
             )
             ax_time_spent.set_xticks(positions)
@@ -3521,11 +3977,12 @@ class TypingTrainerApp:
             ax_time_spent.set_title("Time spent per day")
             handles, labels = ax_time_spent.get_legend_handles_labels()
             handles2, labels2 = ax_time_spent_right.get_legend_handles_labels()
-            ax_time_spent.legend(
+            legend = ax_time_spent.legend(
                 handles + handles2,
                 labels + labels2,
                 loc="upper left"
             )
+            self._style_legend(legend, palette)
         else:
             ax_time.set_title("Daily averages (letters/min vs error %)")
             ax_time.text(
@@ -3534,7 +3991,8 @@ class TypingTrainerApp:
                 "No dated entries available",
                 ha="center",
                 va="center",
-                transform=ax_time.transAxes
+                transform=ax_time.transAxes,
+                color=palette["text_color"]
             )
             ax_time.set_xticks([])
             ax_time.set_yticks([])
@@ -3545,18 +4003,20 @@ class TypingTrainerApp:
                 "No dated entries available",
                 ha="center",
                 va="center",
-                transform=ax_time_spent.transAxes
+                transform=ax_time_spent.transAxes,
+                color=palette["text_color"]
             )
             ax_time_spent.set_xticks([])
             ax_time_spent.set_yticks([])
             ax_time_spent_right.set_yticks([])
+
         formatter = mticker.FormatStrFormatter("%.1f")
         ax_time_spent.yaxis.set_major_formatter(formatter)
         ax_time_spent_right.yaxis.set_major_formatter(formatter)
 
-        plt.tight_layout()
+        self._apply_plot_theme(fig, palette)
+        plt.tight_layout(pad=1.3)
         plt.show()
-
 
     def show_special_stats(self) -> None:
         """
@@ -3668,9 +4128,11 @@ class TypingTrainerApp:
                     daily_duration_minutes.append(0.0)
                 current_day += timedelta(days=1)
 
+        palette = self._get_plot_palette()
         fig = plt.figure(figsize=(12, 10))
         self._configure_figure_window(fig)
         grid_spec = fig.add_gridspec(4, 2, height_ratios=[1.0, 1.2, 1.0, 0.8])
+        grid_spec.update(hspace=0.75, wspace=0.4)
 
         ax_speed = fig.add_subplot(grid_spec[0, 0])
         ax_error = fig.add_subplot(grid_spec[0, 1])
@@ -3679,13 +4141,25 @@ class TypingTrainerApp:
         ax_time_spent = fig.add_subplot(grid_spec[3, :])
         ax_time_spent_right = ax_time_spent.twinx()
 
-        ax_speed.hist(symbols_per_minute, bins="auto")
+        ax_speed.hist(
+            symbols_per_minute,
+            bins="auto",
+            color=palette["hist_speed_color"],
+            edgecolor=palette["axes_facecolor"],
+            alpha=0.85
+        )
         ax_speed.set_title("Special chars per minute distribution")
         ax_speed.set_xlabel("Special chars per minute")
         ax_speed.set_ylabel("Frequency")
 
         if error_rates:
-            ax_error.hist(error_rates, bins="auto")
+            ax_error.hist(
+                error_rates,
+                bins="auto",
+                color=palette["hist_error_color"],
+                edgecolor=palette["axes_facecolor"],
+                alpha=0.85
+            )
             ax_error.set_title("Error percentage distribution")
             ax_error.set_xlabel("Error percentage (%)")
             ax_error.set_ylabel("Frequency")
@@ -3697,7 +4171,8 @@ class TypingTrainerApp:
                 "No error data available",
                 ha="center",
                 va="center",
-                transform=ax_error.transAxes
+                transform=ax_error.transAxes,
+                color=palette["text_color"]
             )
             ax_error.set_xticks([])
             ax_error.set_yticks([])
@@ -3752,36 +4227,41 @@ class TypingTrainerApp:
                     dx,
                     dy,
                     dz,
-                    shade=True
+                    shade=True,
+                    color=palette["bar3d_color"]
                 )
-                ax_3d.set_title("Joint special chars/minute and error distribution")
+                ax_3d.set_title("Joint special chars/min and error distribution")
                 ax_3d.set_xlabel("Special chars per minute")
                 ax_3d.set_ylabel("Error percentage (%)")
                 ax_3d.set_zlabel("Count")
             else:
-                ax_3d.set_title("Joint special chars/minute and error distribution")
+                ax_3d.set_title("Joint special chars/min and error distribution")
                 ax_3d.text(
                     0.5,
                     0.5,
                     0.5,
                     "No combined data available",
                     ha="center",
-                    va="center"
+                    va="center",
+                    color=palette["text_color"]
                 )
                 ax_3d.set_xticks([])
                 ax_3d.set_yticks([])
+                ax_3d.set_zticks([])
         else:
-            ax_3d.set_title("Joint special chars/minute and error distribution")
+            ax_3d.set_title("Joint special chars/min and error distribution")
             ax_3d.text(
                 0.5,
                 0.5,
                 0.5,
                 "No combined data available",
                 ha="center",
-                va="center"
+                va="center",
+                color=palette["text_color"]
             )
             ax_3d.set_xticks([])
             ax_3d.set_yticks([])
+            ax_3d.set_zticks([])
 
         if daily_dates:
             positions = np.arange(len(daily_dates))
@@ -3790,21 +4270,21 @@ class TypingTrainerApp:
                 positions - bar_width,
                 daily_speed,
                 width=bar_width,
-                color="#7ec8f8",
+                color=palette["daily_speed_color"],
                 label="Average special chars/min"
             )
             ax_time.bar(
                 positions,
                 daily_error,
                 width=bar_width,
-                color="#f7c59f",
+                color=palette["daily_error_color"],
                 label="Average error %"
             )
             ax_time.bar(
                 positions + bar_width,
                 daily_duration_minutes,
                 width=bar_width,
-                color="#a5d6a7",
+                color=palette["daily_duration_color"],
                 label="Total time (min)"
             )
             formatted_days = [day.strftime("%Y-%m-%d") for day in daily_dates]
@@ -3816,7 +4296,8 @@ class TypingTrainerApp:
             )
             ax_time.set_ylabel("Daily averages / total time")
             ax_time.set_title("Daily averages (special chars/min vs error %)")
-            ax_time.legend()
+            legend = ax_time.legend()
+            self._style_legend(legend, palette)
 
             cumulative_duration_minutes: List[float] = []
             running_total = 0.0
@@ -3828,14 +4309,16 @@ class TypingTrainerApp:
                 positions,
                 daily_duration_minutes,
                 width=0.4,
-                color="#bcd4e6",
+                color=palette["time_per_day_bar_color"],
                 label="Time per day (min)"
             )
             ax_time_spent_right.plot(
                 positions,
                 cumulative_duration_minutes,
-                color="#33658a",
+                color=palette["time_cumulative_line_color"],
                 marker="o",
+                markerfacecolor=palette["axes_facecolor"],
+                markeredgecolor=palette["time_cumulative_line_color"],
                 label="Cumulative time (min)"
             )
             ax_time_spent.set_xticks(positions)
@@ -3849,11 +4332,12 @@ class TypingTrainerApp:
             ax_time_spent.set_title("Time spent per day")
             handles, labels = ax_time_spent.get_legend_handles_labels()
             handles2, labels2 = ax_time_spent_right.get_legend_handles_labels()
-            ax_time_spent.legend(
+            legend = ax_time_spent.legend(
                 handles + handles2,
                 labels + labels2,
                 loc="upper left"
             )
+            self._style_legend(legend, palette)
         else:
             ax_time.set_title("Daily averages (special chars/min vs error %)")
             ax_time.text(
@@ -3862,7 +4346,8 @@ class TypingTrainerApp:
                 "No dated entries available",
                 ha="center",
                 va="center",
-                transform=ax_time.transAxes
+                transform=ax_time.transAxes,
+                color=palette["text_color"]
             )
             ax_time.set_xticks([])
             ax_time.set_yticks([])
@@ -3873,22 +4358,24 @@ class TypingTrainerApp:
                 "No dated entries available",
                 ha="center",
                 va="center",
-                transform=ax_time_spent.transAxes
+                transform=ax_time_spent.transAxes,
+                color=palette["text_color"]
             )
             ax_time_spent.set_xticks([])
             ax_time_spent.set_yticks([])
             ax_time_spent_right.set_yticks([])
+
         formatter = mticker.FormatStrFormatter("%.1f")
         ax_time_spent.yaxis.set_major_formatter(formatter)
         ax_time_spent_right.yaxis.set_major_formatter(formatter)
 
-        plt.tight_layout()
+        self._apply_plot_theme(fig, palette)
+        plt.tight_layout(pad=1.3)
         plt.show()
-
 
     def show_number_stats(self) -> None:
         """
-        Visualize stored number mode statistics (digits per minute and errors).
+        Visualize stored number mode statistics.
         """
         if self.is_sudden_death_active():
             self._show_sudden_death_stats(
@@ -3996,9 +4483,11 @@ class TypingTrainerApp:
                     daily_duration_minutes.append(0.0)
                 current_day += timedelta(days=1)
 
+        palette = self._get_plot_palette()
         fig = plt.figure(figsize=(12, 10))
         self._configure_figure_window(fig)
         grid_spec = fig.add_gridspec(4, 2, height_ratios=[1.0, 1.2, 1.0, 0.8])
+        grid_spec.update(hspace=0.75, wspace=0.4)
 
         ax_speed = fig.add_subplot(grid_spec[0, 0])
         ax_error = fig.add_subplot(grid_spec[0, 1])
@@ -4007,13 +4496,25 @@ class TypingTrainerApp:
         ax_time_spent = fig.add_subplot(grid_spec[3, :])
         ax_time_spent_right = ax_time_spent.twinx()
 
-        ax_speed.hist(digits_per_minute, bins="auto")
+        ax_speed.hist(
+            digits_per_minute,
+            bins="auto",
+            color=palette["hist_speed_color"],
+            edgecolor=palette["axes_facecolor"],
+            alpha=0.85
+        )
         ax_speed.set_title("Digits per minute distribution")
         ax_speed.set_xlabel("Digits per minute")
         ax_speed.set_ylabel("Frequency")
 
         if error_rates:
-            ax_error.hist(error_rates, bins="auto")
+            ax_error.hist(
+                error_rates,
+                bins="auto",
+                color=palette["hist_error_color"],
+                edgecolor=palette["axes_facecolor"],
+                alpha=0.85
+            )
             ax_error.set_title("Error percentage distribution")
             ax_error.set_xlabel("Error percentage (%)")
             ax_error.set_ylabel("Frequency")
@@ -4025,7 +4526,8 @@ class TypingTrainerApp:
                 "No error data available",
                 ha="center",
                 va="center",
-                transform=ax_error.transAxes
+                transform=ax_error.transAxes,
+                color=palette["text_color"]
             )
             ax_error.set_xticks([])
             ax_error.set_yticks([])
@@ -4080,7 +4582,8 @@ class TypingTrainerApp:
                     dx,
                     dy,
                     dz,
-                    shade=True
+                    shade=True,
+                    color=palette["bar3d_color"]
                 )
                 ax_3d.set_title("Joint digits/minute and error distribution")
                 ax_3d.set_xlabel("Digits per minute")
@@ -4094,7 +4597,8 @@ class TypingTrainerApp:
                     0.5,
                     "No combined data available",
                     ha="center",
-                    va="center"
+                    va="center",
+                    color=palette["text_color"]
                 )
                 ax_3d.set_xticks([])
                 ax_3d.set_yticks([])
@@ -4107,7 +4611,8 @@ class TypingTrainerApp:
                 0.5,
                 "No combined data available",
                 ha="center",
-                va="center"
+                va="center",
+                color=palette["text_color"]
             )
             ax_3d.set_xticks([])
             ax_3d.set_yticks([])
@@ -4120,21 +4625,21 @@ class TypingTrainerApp:
                 positions - bar_width,
                 daily_speed,
                 width=bar_width,
-                color="#7ec8f8",
+                color=palette["daily_speed_color"],
                 label="Average digits/min"
             )
             ax_time.bar(
                 positions,
                 daily_error,
                 width=bar_width,
-                color="#f7c59f",
+                color=palette["daily_error_color"],
                 label="Average error %"
             )
             ax_time.bar(
                 positions + bar_width,
                 daily_duration_minutes,
                 width=bar_width,
-                color="#a5d6a7",
+                color=palette["daily_duration_color"],
                 label="Total time (min)"
             )
             formatted_days = [day.strftime("%Y-%m-%d") for day in daily_dates]
@@ -4146,7 +4651,8 @@ class TypingTrainerApp:
             )
             ax_time.set_ylabel("Daily averages / total time")
             ax_time.set_title("Daily averages (digits/min vs error %)")
-            ax_time.legend()
+            legend = ax_time.legend()
+            self._style_legend(legend, palette)
 
             cumulative_duration_minutes: List[float] = []
             running_total = 0.0
@@ -4158,14 +4664,16 @@ class TypingTrainerApp:
                 positions,
                 daily_duration_minutes,
                 width=0.4,
-                color="#bcd4e6",
+                color=palette["time_per_day_bar_color"],
                 label="Time per day (min)"
             )
             ax_time_spent_right.plot(
                 positions,
                 cumulative_duration_minutes,
-                color="#33658a",
+                color=palette["time_cumulative_line_color"],
                 marker="o",
+                markerfacecolor=palette["axes_facecolor"],
+                markeredgecolor=palette["time_cumulative_line_color"],
                 label="Cumulative time (min)"
             )
             ax_time_spent.set_xticks(positions)
@@ -4179,11 +4687,12 @@ class TypingTrainerApp:
             ax_time_spent.set_title("Time spent per day")
             handles, labels = ax_time_spent.get_legend_handles_labels()
             handles2, labels2 = ax_time_spent_right.get_legend_handles_labels()
-            ax_time_spent.legend(
+            legend = ax_time_spent.legend(
                 handles + handles2,
                 labels + labels2,
                 loc="upper left"
             )
+            self._style_legend(legend, palette)
         else:
             ax_time.set_title("Daily averages (digits/min vs error %)")
             ax_time.text(
@@ -4192,7 +4701,8 @@ class TypingTrainerApp:
                 "No dated entries available",
                 ha="center",
                 va="center",
-                transform=ax_time.transAxes
+                transform=ax_time.transAxes,
+                color=palette["text_color"]
             )
             ax_time.set_xticks([])
             ax_time.set_yticks([])
@@ -4203,18 +4713,20 @@ class TypingTrainerApp:
                 "No dated entries available",
                 ha="center",
                 va="center",
-                transform=ax_time_spent.transAxes
+                transform=ax_time_spent.transAxes,
+                color=palette["text_color"]
             )
             ax_time_spent.set_xticks([])
             ax_time_spent.set_yticks([])
             ax_time_spent_right.set_yticks([])
+
         formatter = mticker.FormatStrFormatter("%.1f")
         ax_time_spent.yaxis.set_major_formatter(formatter)
         ax_time_spent_right.yaxis.set_major_formatter(formatter)
 
-        plt.tight_layout()
+        self._apply_plot_theme(fig, palette)
+        plt.tight_layout(pad=1.3)
         plt.show()
-
 
     def show_general_stats(self) -> None:
         """
@@ -4405,6 +4917,7 @@ class TypingTrainerApp:
         if not np.isfinite(max_minutes) or max_minutes == 0.0:
             max_minutes = 1.0
 
+        palette = self._get_plot_palette()
         fig = plt.figure(figsize=(14, 10.2))
         gridspec = fig.add_gridspec(
             3,
@@ -4420,9 +4933,12 @@ class TypingTrainerApp:
         self._configure_figure_window(fig)
         cmap = mcolors.LinearSegmentedColormap.from_list(
             "time_heatmap",
-            ["#ffffff", "#0d3b66"]
+            [
+                palette["heatmap_low_color"],
+                palette["heatmap_high_color"]
+            ]
         )
-        cmap.set_bad(color="#f0f0f0")
+        cmap.set_bad(color=palette["heatmap_bad_color"])
         norm = mcolors.Normalize(vmin=0.0, vmax=max_minutes)
         im = ax_heatmap.imshow(
             heatmap_data,
@@ -4471,15 +4987,17 @@ class TypingTrainerApp:
             month_positions,
             monthly_minutes,
             width=0.5,
-            color="#bcd4e6",
+            color=palette["time_per_day_bar_color"],
             label="Time per month (min)"
         )
         ax_cumulative = ax_time_spent.twinx()
         cumulative_line, = ax_cumulative.plot(
             month_positions,
             cumulative_minutes,
-            color="#33658a",
+            color=palette["time_cumulative_line_color"],
             marker="o",
+            markerfacecolor=palette["axes_facecolor"],
+            markeredgecolor=palette["time_cumulative_line_color"],
             linewidth=1.8,
             label="Cumulative time (min)"
         )
@@ -4498,20 +5016,30 @@ class TypingTrainerApp:
         ax_cumulative.yaxis.set_major_formatter(formatter)
         handles, labels = ax_time_spent.get_legend_handles_labels()
         handles2, labels2 = ax_cumulative.get_legend_handles_labels()
-        ax_time_spent.legend(
+        legend = ax_time_spent.legend(
             handles + handles2,
             labels + labels2,
             loc="upper left",
             frameon=False
         )
+        self._style_legend(legend, palette)
 
         annotation = ax_heatmap.annotate(
             "",
             xy=(0, 0),
             xytext=(15, 15),
             textcoords="offset points",
-            bbox=dict(boxstyle="round", fc="#ffffff", ec="#333333", alpha=0.9),
-            arrowprops=dict(arrowstyle="->", color="#333333")
+            bbox=dict(
+                boxstyle="round",
+                fc=palette["annotation_face_color"],
+                ec=palette["annotation_edge_color"],
+                alpha=0.9
+            ),
+            arrowprops=dict(
+                arrowstyle="->",
+                color=palette["annotation_edge_color"]
+            ),
+            color=palette["annotation_text_color"]
         )
         annotation.set_visible(False)
 
@@ -4583,7 +5111,8 @@ class TypingTrainerApp:
                     0.5,
                     "No time recorded yet",
                     ha="center",
-                    va="center"
+                    va="center",
+                    color=palette["text_color"]
                 )
                 ax.set_title(title, pad=12)
                 return
@@ -4598,13 +5127,14 @@ class TypingTrainerApp:
                 legend_entries.append(
                     f"{label}: {percent:.1f}% ({_format_minutes(value)})"
                 )
-            ax.legend(
+            legend = ax.legend(
                 wedges,
                 legend_entries,
                 loc="center left",
                 bbox_to_anchor=(0.9, 0.5),
                 frameon=False
             )
+            self._style_legend(legend, palette)
             ax.set_title(title, pad=16)
 
         fig.canvas.mpl_connect("motion_notify_event", _on_mouse_move)
@@ -4616,7 +5146,7 @@ class TypingTrainerApp:
             training_seconds["regular"] / 60.0
         ]
 
-        mode_colors = ["#4f6d7a", "#7b8c5f", "#b7a57a", "#9a8c98"]
+        mode_colors = palette["pie_mode_colors"]
         _build_pie_chart(
             ax_modes,
             mode_minutes,
@@ -4626,7 +5156,7 @@ class TypingTrainerApp:
         )
 
         training_labels = ["Training mode", "Non-training mode"]
-        training_colors = ["#547c8c", "#a0606a"]
+        training_colors = palette["pie_training_colors"]
         _build_pie_chart(
             ax_training,
             training_minutes,
@@ -4635,6 +5165,7 @@ class TypingTrainerApp:
             "Training vs non-training time"
         )
 
+        self._apply_plot_theme(fig, palette)
         fig.tight_layout()
         fig.subplots_adjust(top=0.94, bottom=0.02, left=0.05, right=0.98)
         plt.show()
