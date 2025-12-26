@@ -24,6 +24,7 @@ import threading
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
+from matplotlib.widgets import Button
 import numpy as np
 
 if TYPE_CHECKING:
@@ -4857,65 +4858,117 @@ class TypingTrainerApp:
                         training_seconds["regular"] += duration_seconds
 
         today = datetime.now().date()
-        start_date = today - timedelta(days=364)
-        start_week = start_date - timedelta(days=start_date.weekday())
-        end_week = today + timedelta(days=(6 - today.weekday()))
-        total_days = (end_week - start_week).days + 1
-        num_weeks = max(total_days // 7, 1)
-
-        heatmap_data = np.full((7, num_weeks), np.nan, dtype=float)
-        date_grid: list[list[date | None]] = [
-            [None for _ in range(num_weeks)] for _ in range(7)
-        ]
-
-        current_day = start_week
-        for idx in range(total_days):
-            week_idx = idx // 7
-            weekday_idx = current_day.weekday()
-            if week_idx >= num_weeks:
-                break
-            date_grid[weekday_idx][week_idx] = current_day
-            if start_date <= current_day <= today:
-                seconds = daily_seconds.get(current_day, 0.0)
-                heatmap_data[weekday_idx, week_idx] = seconds / 60.0
-            current_day += timedelta(days=1)
-
-        monthly_totals: dict[tuple[int, int], float] = {}
-        for day_value, seconds in daily_seconds.items():
-            if start_date <= day_value <= today:
-                key = (day_value.year, day_value.month)
-                monthly_totals[key] = (
-                    monthly_totals.get(key, 0.0) + seconds / 60.0
-                )
+        current_year_offset = 0
 
         def _first_of_month(value: date) -> date:
             return date(value.year, value.month, 1)
 
-        monthly_labels: list[str] = []
-        monthly_minutes: list[float] = []
-        cumulative_minutes: list[float] = []
-        cumulative_total = 0.0
-        current_month = _first_of_month(start_date)
-        last_month = _first_of_month(today)
-        while current_month <= last_month:
-            key = (current_month.year, current_month.month)
-            minutes_value = monthly_totals.get(key, 0.0)
-            cumulative_total += minutes_value
-            monthly_labels.append(current_month.strftime("%b %Y"))
-            monthly_minutes.append(minutes_value)
-            cumulative_minutes.append(cumulative_total)
-            if current_month.month == 12:
-                current_month = date(current_month.year + 1, 1, 1)
-            else:
-                current_month = date(
-                    current_month.year,
-                    current_month.month + 1,
-                    1
-                )
+        today_ordinal = today.toordinal()
+        min_end_ordinal = date.min.toordinal() + 364
+        max_end_ordinal = date.max.toordinal()
 
-        max_minutes = np.nanmax(heatmap_data)
-        if not np.isfinite(max_minutes) or max_minutes == 0.0:
-            max_minutes = 1.0
+        def _compute_year_view(year_offset: int) -> dict[str, Any]:
+            target_end = today_ordinal - year_offset * 365
+            target_end = max(min_end_ordinal, min(max_end_ordinal, target_end))
+            window_end = date.fromordinal(target_end)
+            window_start = window_end - timedelta(days=364)
+
+            start_week_offset = window_start.weekday()
+            start_week_ordinal = window_start.toordinal() - start_week_offset
+            if start_week_ordinal < date.min.toordinal():
+                start_week_ordinal = date.min.toordinal()
+            start_week = date.fromordinal(start_week_ordinal)
+
+            end_week_offset = 6 - window_end.weekday()
+            end_week_ordinal = window_end.toordinal() + end_week_offset
+            if end_week_ordinal > date.max.toordinal():
+                end_week_ordinal = date.max.toordinal()
+            end_week = date.fromordinal(end_week_ordinal)
+
+            total_days = (end_week - start_week).days + 1
+            num_weeks = max(total_days // 7, 1)
+
+            heatmap_data = np.full((7, num_weeks), np.nan, dtype=float)
+            date_grid: List[List[date | None]] = [
+                [None for _ in range(num_weeks)] for _ in range(7)
+            ]
+
+            current_day = start_week
+            for idx in range(total_days):
+                week_idx = idx // 7
+                weekday_idx = current_day.weekday()
+                if week_idx >= num_weeks:
+                    break
+                date_grid[weekday_idx][week_idx] = current_day
+                if window_start <= current_day <= window_end:
+                    seconds = daily_seconds.get(current_day, 0.0)
+                    heatmap_data[weekday_idx, week_idx] = seconds / 60.0
+                current_day += timedelta(days=1)
+
+            week_start_days = [
+                start_week + timedelta(days=week_idx * 7)
+                for week_idx in range(num_weeks)
+            ]
+            tick_positions: List[int] = []
+            tick_labels: List[str] = []
+            for idx, week_start in enumerate(week_start_days):
+                if idx == 0 or week_start.day <= 7:
+                    tick_positions.append(idx)
+                    tick_labels.append(week_start.strftime("%b %d"))
+
+            monthly_totals: dict[tuple[int, int], float] = {}
+            for day_value, seconds in daily_seconds.items():
+                if window_start <= day_value <= window_end:
+                    key = (day_value.year, day_value.month)
+                    monthly_totals[key] = (
+                        monthly_totals.get(key, 0.0) + seconds / 60.0
+                    )
+
+            monthly_labels: List[str] = []
+            monthly_minutes: List[float] = []
+            cumulative_minutes: List[float] = []
+            cumulative_total = 0.0
+            current_month = _first_of_month(window_start)
+            last_month = _first_of_month(window_end)
+            while current_month <= last_month:
+                key = (current_month.year, current_month.month)
+                minutes_value = monthly_totals.get(key, 0.0)
+                cumulative_total += minutes_value
+                monthly_labels.append(current_month.strftime("%b %Y"))
+                monthly_minutes.append(minutes_value)
+                cumulative_minutes.append(cumulative_total)
+                if current_month.month == 12:
+                    current_month = date(current_month.year + 1, 1, 1)
+                else:
+                    current_month = date(
+                        current_month.year,
+                        current_month.month + 1,
+                        1
+                    )
+
+            max_minutes = np.nanmax(heatmap_data)
+            if not np.isfinite(max_minutes) or max_minutes == 0.0:
+                max_minutes = 1.0
+
+            range_label = (
+                f"{window_start.strftime('%b %d, %Y')} - "
+                f"{window_end.strftime('%b %d, %Y')}"
+            )
+
+            return {
+                "window_start": window_start,
+                "window_end": window_end,
+                "heatmap_data": heatmap_data,
+                "date_grid": date_grid,
+                "num_weeks": num_weeks,
+                "tick_positions": tick_positions,
+                "tick_labels": tick_labels,
+                "monthly_labels": monthly_labels,
+                "monthly_minutes": monthly_minutes,
+                "cumulative_minutes": cumulative_minutes,
+                "max_minutes": max_minutes,
+                "range_label": range_label
+            }
 
         palette = self._get_plot_palette()
         fig = plt.figure(figsize=(14, 10.2))
@@ -4930,6 +4983,7 @@ class TypingTrainerApp:
         ax_time_spent = fig.add_subplot(gridspec[1, :])
         ax_modes = fig.add_subplot(gridspec[2, 0])
         ax_training = fig.add_subplot(gridspec[2, 1])
+        ax_cumulative = ax_time_spent.twinx()
         self._configure_figure_window(fig)
         cmap = mcolors.LinearSegmentedColormap.from_list(
             "time_heatmap",
@@ -4939,17 +4993,18 @@ class TypingTrainerApp:
             ]
         )
         cmap.set_bad(color=palette["heatmap_bad_color"])
-        norm = mcolors.Normalize(vmin=0.0, vmax=max_minutes)
-        im = ax_heatmap.imshow(
-            heatmap_data,
-            aspect="auto",
-            origin="upper",
-            cmap=cmap,
-            norm=norm
-        )
+        y_formatter = mticker.FormatStrFormatter("%.0f")
 
-        colorbar = fig.colorbar(im, ax=ax_heatmap, pad=0.02)
-        colorbar.set_label("Minutes spent per day")
+        button_prev_ax = fig.add_axes([0.87, 0.74, 0.11, 0.05])
+        button_next_ax = fig.add_axes([0.87, 0.66, 0.11, 0.05])
+        button_prev_ax.set_in_layout(False)
+        button_next_ax.set_in_layout(False)
+        button_prev = Button(button_prev_ax, "Previous year")
+        button_next = Button(button_next_ax, "Next year")
+        button_prev.color = palette["toolbar_background"]
+        button_next.color = palette["toolbar_background"]
+        button_prev.hovercolor = palette["toolbar_button_active"]
+        button_next.hovercolor = palette["toolbar_button_active"]
 
         weekday_labels = [
             "Monday",
@@ -4960,101 +5015,159 @@ class TypingTrainerApp:
             "Saturday",
             "Sunday"
         ]
-        ax_heatmap.set_yticks(range(7))
-        ax_heatmap.set_yticklabels(weekday_labels)
 
-        week_start_days = [
-            start_week + timedelta(days=week_idx * 7)
-            for week_idx in range(num_weeks)
-        ]
-        tick_positions: List[int] = []
-        tick_labels: List[str] = []
-        for idx, week_start in enumerate(week_start_days):
-            if idx == 0 or week_start.day <= 7:
-                tick_positions.append(idx)
-                tick_labels.append(week_start.strftime("%b %d"))
+        heatmap_state: dict[str, Any] = {
+            "heatmap_data": None,
+            "date_grid": [],
+            "num_weeks": 0,
+            "annotation": None
+        }
+        colorbar = None
 
-        if tick_positions:
-            ax_heatmap.set_xticks(tick_positions)
-            ax_heatmap.set_xticklabels(tick_labels, rotation=45, ha="right")
+        def _style_year_buttons() -> None:
+            button_prev.ax.set_facecolor(palette["toolbar_background"])
+            button_next.ax.set_facecolor(palette["toolbar_background"])
+            button_prev.label.set_color(palette["text_color"])
+            button_next.label.set_color(palette["text_color"])
 
-        ax_heatmap.set_xlabel("Weeks (starting Mondays)")
-        ax_heatmap.set_ylabel("Day of week")
-        ax_heatmap.set_title("Daily time spent (last 365 days)")
-
-        month_positions = np.arange(len(monthly_minutes))
-        ax_time_spent.bar(
-            month_positions,
-            monthly_minutes,
-            width=0.5,
-            color=palette["time_per_day_bar_color"],
-            label="Time per month (min)"
-        )
-        ax_cumulative = ax_time_spent.twinx()
-        cumulative_line, = ax_cumulative.plot(
-            month_positions,
-            cumulative_minutes,
-            color=palette["time_cumulative_line_color"],
-            marker="o",
-            markerfacecolor=palette["axes_facecolor"],
-            markeredgecolor=palette["time_cumulative_line_color"],
-            linewidth=1.8,
-            label="Cumulative time (min)"
-        )
-        ax_time_spent.set_xticks(month_positions)
-        ax_time_spent.set_xticklabels(
-            monthly_labels,
-            rotation=45,
-            ha="right"
-        )
-        ax_time_spent.set_ylabel("Minutes per month")
-        ax_cumulative.set_ylabel("Cumulative minutes")
-        ax_time_spent.set_xlabel("Month")
-        ax_time_spent.set_title("Time spent progression (last 365 days)")
-        formatter = mticker.FormatStrFormatter("%.0f")
-        ax_time_spent.yaxis.set_major_formatter(formatter)
-        ax_cumulative.yaxis.set_major_formatter(formatter)
-        handles, labels = ax_time_spent.get_legend_handles_labels()
-        handles2, labels2 = ax_cumulative.get_legend_handles_labels()
-        legend = ax_time_spent.legend(
-            handles + handles2,
-            labels + labels2,
-            loc="upper left",
-            frameon=False
-        )
-        self._style_legend(legend, palette)
-
-        annotation = ax_heatmap.annotate(
-            "",
-            xy=(0, 0),
-            xytext=(15, 15),
-            textcoords="offset points",
-            bbox=dict(
-                boxstyle="round",
-                fc=palette["annotation_face_color"],
-                ec=palette["annotation_edge_color"],
-                alpha=0.9
-            ),
-            arrowprops=dict(
-                arrowstyle="->",
-                color=palette["annotation_edge_color"]
-            ),
-            color=palette["annotation_text_color"]
-        )
-        annotation.set_visible(False)
+        _style_year_buttons()
 
         def _format_minutes(value: float) -> str:
             if value >= 60.0:
                 return f"{value / 60.0:.1f} h"
             return f"{value:.1f} min"
 
+        def _draw_year_view(year_offset: int) -> None:
+            nonlocal colorbar
+            view_data = _compute_year_view(year_offset)
+            ax_heatmap.clear()
+            norm = mcolors.Normalize(
+                vmin=0.0,
+                vmax=view_data["max_minutes"]
+            )
+            im = ax_heatmap.imshow(
+                view_data["heatmap_data"],
+                aspect="auto",
+                origin="upper",
+                cmap=cmap,
+                norm=norm
+            )
+            if colorbar is None:
+                colorbar = fig.colorbar(im, ax=ax_heatmap, pad=0.02)
+            else:
+                colorbar.update_normal(im)
+            colorbar.set_label("Minutes spent per day")
+            ax_heatmap.set_yticks(range(7))
+            ax_heatmap.set_yticklabels(weekday_labels)
+            if view_data["tick_positions"]:
+                ax_heatmap.set_xticks(view_data["tick_positions"])
+                ax_heatmap.set_xticklabels(
+                    view_data["tick_labels"],
+                    rotation=45,
+                    ha="right"
+                )
+            else:
+                ax_heatmap.set_xticks([])
+                ax_heatmap.set_xticklabels([])
+            ax_heatmap.set_xlabel("Weeks (starting Mondays)")
+            ax_heatmap.set_ylabel("Day of week")
+            ax_heatmap.set_title(
+                f"Daily time spent ({view_data['range_label']})"
+            )
+            annotation = ax_heatmap.annotate(
+                "",
+                xy=(0, 0),
+                xytext=(15, 15),
+                textcoords="offset points",
+                bbox=dict(
+                    boxstyle="round",
+                    fc=palette["annotation_face_color"],
+                    ec=palette["annotation_edge_color"],
+                    alpha=0.9
+                ),
+                arrowprops=dict(
+                    arrowstyle="->",
+                    color=palette["annotation_edge_color"]
+                ),
+                color=palette["annotation_text_color"]
+            )
+            annotation.set_visible(False)
+
+            heatmap_state["heatmap_data"] = view_data["heatmap_data"]
+            heatmap_state["date_grid"] = view_data["date_grid"]
+            heatmap_state["num_weeks"] = view_data["num_weeks"]
+            heatmap_state["annotation"] = annotation
+
+            ax_time_spent.clear()
+            ax_cumulative.clear()
+            month_positions = np.arange(len(view_data["monthly_minutes"]))
+            ax_time_spent.bar(
+                month_positions,
+                view_data["monthly_minutes"],
+                width=0.5,
+                color=palette["time_per_day_bar_color"],
+                label="Time per month (min)"
+            )
+            ax_cumulative.plot(
+                month_positions,
+                view_data["cumulative_minutes"],
+                color=palette["time_cumulative_line_color"],
+                marker="o",
+                markerfacecolor=palette["axes_facecolor"],
+                markeredgecolor=palette["time_cumulative_line_color"],
+                linewidth=1.8,
+                label="Cumulative time (min)"
+            )
+            if len(month_positions) > 0:
+                ax_time_spent.set_xticks(month_positions)
+                ax_time_spent.set_xticklabels(
+                    view_data["monthly_labels"],
+                    rotation=45,
+                    ha="right"
+                )
+            else:
+                ax_time_spent.set_xticks([])
+                ax_time_spent.set_xticklabels([])
+            ax_time_spent.set_ylabel("Minutes per month")
+            ax_cumulative.set_ylabel("Cumulative minutes")
+            ax_time_spent.set_xlabel("Month")
+            ax_time_spent.set_title(
+                f"Time spent progression ({view_data['range_label']})"
+            )
+            ax_time_spent.yaxis.set_major_formatter(y_formatter)
+            ax_cumulative.yaxis.set_major_formatter(y_formatter)
+            handles, labels = ax_time_spent.get_legend_handles_labels()
+            handles2, labels2 = ax_cumulative.get_legend_handles_labels()
+            legend = ax_time_spent.legend(
+                handles + handles2,
+                labels + labels2,
+                loc="upper left",
+                frameon=False
+            )
+            self._style_legend(legend, palette)
+            self._apply_plot_theme(fig, palette)
+            _style_year_buttons()
+            fig.canvas.draw_idle()
+
+        def _shift_year(delta: int) -> None:
+            nonlocal current_year_offset
+            current_year_offset += delta
+            _draw_year_view(current_year_offset)
+
         def _on_mouse_move(event) -> None:
+            annotation = heatmap_state.get("annotation")
+            heatmap_data = heatmap_state.get("heatmap_data")
+            date_grid = heatmap_state.get("date_grid")
+            num_weeks = heatmap_state.get("num_weeks", 0)
             if (
                 event.inaxes != ax_heatmap
                 or event.xdata is None
                 or event.ydata is None
+                or annotation is None
+                or heatmap_data is None
+                or not date_grid
             ):
-                if annotation.get_visible():
+                if annotation and annotation.get_visible():
                     annotation.set_visible(False)
                     fig.canvas.draw_idle()
                 return
@@ -5137,8 +5250,6 @@ class TypingTrainerApp:
             self._style_legend(legend, palette)
             ax.set_title(title, pad=16)
 
-        fig.canvas.mpl_connect("motion_notify_event", _on_mouse_move)
-
         mode_order = ["typing", "letter", "number", "character"]
         mode_minutes = [mode_seconds[key] / 60.0 for key in mode_order]
         training_minutes = [
@@ -5165,9 +5276,12 @@ class TypingTrainerApp:
             "Training vs non-training time"
         )
 
-        self._apply_plot_theme(fig, palette)
-        fig.tight_layout()
-        fig.subplots_adjust(top=0.94, bottom=0.02, left=0.05, right=0.98)
+        _draw_year_view(current_year_offset)
+        fig.canvas.mpl_connect("motion_notify_event", _on_mouse_move)
+        button_prev.on_clicked(lambda _event: _shift_year(1))
+        button_next.on_clicked(lambda _event: _shift_year(-1))
+
+        fig.subplots_adjust(top=0.94, bottom=0.02, left=0.05, right=0.82)
         plt.show()
 
 
