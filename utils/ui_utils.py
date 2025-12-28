@@ -125,48 +125,64 @@ NUMBER_SEQUENCE_LENGTH = 100
 TARGET_TEXT_DISPLAY_WIDTH = 90
 TARGET_TEXT_LINE_LENGTH = 80
 LIGHT_THEME = {
-    "background": "#f4f4f4",
+    "background": "#f4f6fb",
     "surface": "#ffffff",
-    "text": "#111111",
-    "muted_text": "#333333",
-    "accent": "#3a7afe",
-    "button_background": "#e1e1e1",
-    "button_foreground": "#111111",
-    "button_active_background": "#d0d0d0",
+    "text": "#111827",
+    "muted_text": "#4b5563",
+    "accent": "#3b82f6",
+    "button_background": "#e4e8f1",
+    "button_foreground": "#111827",
+    "button_active_background": "#d4dae6",
     "input_background": "#ffffff",
-    "input_foreground": "#111111",
-    "select_background": "#cde2ff",
-    "select_foreground": "#111111",
-    "error_background": "#ffd6d6",
-    "error_foreground": "#7a0000",
-    "border": "#c0c0c0",
-    "titlebar_color": "#f1f1f1",
-    "titlebar_text": "#111111",
-    "titlebar_border": "#c0c0c0",
-    "blind_highlight": "#d0d0d0",
+    "input_foreground": "#111827",
+    "select_background": "#dbeafe",
+    "select_foreground": "#0f172a",
+    "error_background": "#fee2e2",
+    "error_foreground": "#b91c1c",
+    "border": "#d1d5db",
+    "titlebar_color": "#f4f6fb",
+    "titlebar_text": "#111827",
+    "titlebar_border": "#d1d5db",
+    "blind_highlight": "#e5e7eb",
     "blind_mask_foreground": "#ffffff",
+    "tab_background": "#e5e7eb",
+    "tab_foreground": "#4b5563",
+    "tab_active_background": "#ffffff",
+    "tab_active_foreground": "#111827",
+    "tab_border": "#d1d5db",
+    "combobox_background": "#ffffff",
+    "combobox_foreground": "#111827",
+    "combobox_border": "#cfd5e3",
 }
 DARK_THEME = {
-    "background": "#121212",
-    "surface": "#1f1f1f",
-    "text": "#f4f4f4",
-    "muted_text": "#c6c6c6",
-    "accent": "#569cd6",
-    "button_background": "#333333",
-    "button_foreground": "#f4f4f4",
-    "button_active_background": "#3f3f3f",
-    "input_background": "#1f1f1f",
-    "input_foreground": "#f4f4f4",
-    "select_background": "#264f78",
-    "select_foreground": "#f4f4f4",
-    "error_background": "#5c1b1b",
-    "error_foreground": "#ffb4b4",
-    "border": "#3a3a3a",
-    "titlebar_color": "#1f1f1f",
-    "titlebar_text": "#f4f4f4",
-    "titlebar_border": "#333333",
-    "blind_highlight": "#555555",
-    "blind_mask_foreground": "#1f1f1f",
+    "background": "#0d1117",
+    "surface": "#161b22",
+    "text": "#f4f6fb",
+    "muted_text": "#a5b4c3",
+    "accent": "#60a5fa",
+    "button_background": "#1f2430",
+    "button_foreground": "#f4f6fb",
+    "button_active_background": "#2b3240",
+    "input_background": "#11141b",
+    "input_foreground": "#f4f6fb",
+    "select_background": "#1e3a8a",
+    "select_foreground": "#f4f6fb",
+    "error_background": "#4c1d1d",
+    "error_foreground": "#fecaca",
+    "border": "#252c36",
+    "titlebar_color": "#0d1117",
+    "titlebar_text": "#f4f6fb",
+    "titlebar_border": "#1f2630",
+    "blind_highlight": "#2b3240",
+    "blind_mask_foreground": "#161b22",
+    "tab_background": "#11141b",
+    "tab_foreground": "#94a3b8",
+    "tab_active_background": "#1f2430",
+    "tab_active_foreground": "#f4f6fb",
+    "tab_border": "#1f2630",
+    "combobox_background": "#161b22",
+    "combobox_foreground": "#f4f6fb",
+    "combobox_border": "#2f3543",
 }
 
 
@@ -971,6 +987,62 @@ class TypingTrainerApp(PlotMixin):
             "TCheckbutton",
             background=theme["background"],
             foreground=theme["text"]
+        )
+        self.style.configure(
+            "TNotebook",
+            background=theme["background"],
+            bordercolor=theme["tab_border"],
+            borderwidth=0,
+            padding=0,
+            tabmargins=(0, 6, 0, 0)
+        )
+        self.style.configure(
+            "TNotebook.Tab",
+            background=theme["tab_background"],
+            foreground=theme["tab_foreground"],
+            padding=(14, 6),
+            borderwidth=0
+        )
+        self.style.map(
+            "TNotebook.Tab",
+            background=[
+                ("selected", theme["tab_active_background"]),
+                ("active", theme["tab_active_background"])
+            ],
+            foreground=[
+                ("selected", theme["tab_active_foreground"]),
+                ("active", theme["tab_active_foreground"])
+            ],
+            bordercolor=[
+                ("selected", theme["tab_border"]),
+                ("active", theme["tab_border"])
+            ]
+        )
+        self.style.configure(
+            "TCombobox",
+            fieldbackground=theme["combobox_background"],
+            background=theme["combobox_background"],
+            foreground=theme["combobox_foreground"],
+            arrowcolor=theme["muted_text"],
+            bordercolor=theme["combobox_border"],
+            lightcolor=theme["combobox_border"],
+            darkcolor=theme["combobox_border"],
+            padding=4
+        )
+        self.style.map(
+            "TCombobox",
+            fieldbackground=[
+                ("readonly", theme["combobox_background"]),
+                ("disabled", theme["background"])
+            ],
+            foreground=[
+                ("readonly", theme["combobox_foreground"]),
+                ("disabled", theme["muted_text"])
+            ],
+            background=[
+                ("readonly", theme["combobox_background"]),
+                ("disabled", theme["background"])
+            ]
         )
 
         # Classic Tk widgets require manual configuration.
