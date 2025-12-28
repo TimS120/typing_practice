@@ -15,20 +15,16 @@ import time
 import textwrap
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, List, TYPE_CHECKING
+from typing import Any, List
 import ctypes
 from ctypes import wintypes
 import sys
-import threading
 
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 from matplotlib.widgets import Button
 import numpy as np
-
-if TYPE_CHECKING:
-    from transformers.pipelines import TextGenerationPipeline
 
 import tkinter as tk
 import tkinter.font as tkfont
@@ -149,14 +145,6 @@ SPECIAL_MODE_CHARACTERS = string.punctuation + "\u00a7\u00b2\u00b3"
 NUMBER_SEQUENCE_LENGTH = 100
 TARGET_TEXT_DISPLAY_WIDTH = 90
 TARGET_TEXT_LINE_LENGTH = 80
-RANDOM_TEXT_LABEL = "Random Text"
-RANDOM_TEXT_CHAR_LIMIT = 300
-RANDOM_MAX_GENERATIONS = 4
-TEXT_GENERATION_MODEL_NAME = "distilgpt2"
-TEXT_GENERATION_MAX_LENGTH = 200
-TEXT_GENERATION_TEMPERATURE = 0.95
-TEXT_GENERATION_TOP_P = 0.92
-TEXT_GENERATION_TOP_K = 50
 LIGHT_THEME = {
     "background": "#f4f4f4",
     "surface": "#ffffff",
@@ -434,9 +422,6 @@ class TypingTrainerApp:
 
         self.current_font_size: int = DEFAULT_FONT_SIZE
         self.text_font: tkfont.Font | None = None
-        self.text_generator: TextGenerationPipeline | None = None
-        self.text_generator_loading: bool = False
-
         self.error_count: int = 0
         self.correct_count: int = 0
         self.previous_text: str = ""
@@ -490,7 +475,6 @@ class TypingTrainerApp:
         self.sudden_death_mode_combobox: ttk.Combobox | None = None
 
         self._build_gui()
-        self._schedule_generator_warmup()
 
 
     def _build_gui(self) -> None:
@@ -528,8 +512,6 @@ class TypingTrainerApp:
         )
         self.text_listbox.grid(row=1, column=0, sticky="ns")
 
-        self.text_listbox.insert(tk.END, RANDOM_TEXT_LABEL)
-
         for idx, text in enumerate(self.texts, start=1):
             first_line = text.splitlines()[0] if text.splitlines() else text
             preview = (
@@ -552,7 +534,7 @@ class TypingTrainerApp:
         random_button = ttk.Button(
             button_frame,
             text="Load random",
-            command=self.on_load_random,
+            command=self.on_load_random
         )
         random_button.grid(row=0, column=1, sticky="ew", padx=(4, 0))
 
@@ -799,38 +781,6 @@ class TypingTrainerApp:
             return False
         value = parts[flag_index].strip().lower()
         return value in {"1", "true", "yes", "y"}
-
-
-    def _set_info_text(self, text: str) -> None:
-        """
-        Safely update the info label from any thread.
-        """
-        def _apply() -> None:
-            self.info_label.configure(text=text)
-
-        self.master.after(0, _apply)
-
-
-    def _schedule_generator_warmup(self) -> None:
-        """
-        Kick off a background warm-up for the text generator.
-        """
-        self.master.after(500, self._start_generator_warmup_thread)
-
-
-    def _start_generator_warmup_thread(self) -> None:
-        if self.text_generator is not None:
-            return
-
-        threading.Thread(
-            target=self._warm_up_generator_worker,
-            name="random-text-warmup",
-            daemon=True
-        ).start()
-
-
-    def _warm_up_generator_worker(self) -> None:
-        self._ensure_text_generator(show_errors=False)
 
 
     def _block_target_copy(self, event: tk.Event) -> str:
@@ -1479,10 +1429,16 @@ class TypingTrainerApp:
 
     def on_load_random(self) -> None:
         """
-        Load a random text from the list of available texts.
+        Select a random text from the provided list and load it.
         """
-        total_entries = len(self.texts) + 1
-        index = random.randrange(total_entries)
+        if not self.texts:
+            messagebox.showinfo(
+                "Selection",
+                "No texts are available to load."
+            )
+            return
+
+        index = random.randrange(len(self.texts))
         self.text_listbox.selection_clear(0, tk.END)
         self.text_listbox.selection_set(index)
         self._load_text_from_index(index)
@@ -1492,7 +1448,7 @@ class TypingTrainerApp:
         """
         Resolve the listbox index to a text string and display it.
         """
-        total_entries = len(self.texts) + 1
+        total_entries = len(self.texts)
         if index < 0 or index >= total_entries:
             messagebox.showinfo(
                 "Selection",
@@ -1500,177 +1456,9 @@ class TypingTrainerApp:
             )
             return
 
-        if index == 0:
-            generated_text = self._generate_random_sentence_text()
-            if not generated_text:
-                if self.text_generator_loading:
-                    messagebox.showinfo(
-                        "Random text",
-                        "The random text generator is still starting up. "
-                        "Please try again in a moment."
-                    )
-                else:
-                    messagebox.showinfo(
-                        "Random text",
-                        "Unable to generate a random text right now."
-                    )
-                return
-            self.selected_text = generated_text
-        else:
-            real_index = index - 1
-            self.selected_text = self.texts[real_index]
+        self.selected_text = self.texts[index]
 
         self._apply_loaded_text()
-
-
-    def _ensure_text_generator(
-        self,
-        show_errors: bool = True
-    ) -> TextGenerationPipeline | None:
-        """
-        Lazily initialize and cache the Hugging Face text-generation pipeline.
-        """
-        if self.text_generator is not None:
-            return self.text_generator
-
-        if self.text_generator_loading:
-            return None
-
-        self.text_generator_loading = True
-        self._set_info_text(
-            "Preparing random text generator. First use may take a minute..."
-        )
-
-        try:
-            from transformers import pipeline
-
-            self.text_generator = pipeline(
-                "text-generation",
-                model=TEXT_GENERATION_MODEL_NAME,
-                device=-1,
-                framework="pt"
-            )
-        except Exception:
-            self.text_generator = None
-            if show_errors:
-                self.master.after(
-                    0,
-                    lambda: messagebox.showerror(
-                        "Random text",
-                        "The transformer model could not be initialized. "
-                        "Please verify that transformers/torch are installed "
-                        "and that the model weights can be downloaded."
-                    )
-                )
-        finally:
-            self.text_generator_loading = False
-
-        if self.text_generator is not None:
-            self._set_info_text(
-                "Random text generator ready. Start typing in the input area."
-            )
-        else:
-            self._set_info_text(
-                "Random text generator unavailable. Select a stored text."
-            )
-
-        return self.text_generator
-
-
-    def _generate_random_sentence_text(
-        self,
-        target_length: int = RANDOM_TEXT_CHAR_LIMIT
-    ) -> str:
-        """
-        Build a text out of transformer-generated sequences up to the target length.
-        """
-        generator = self._ensure_text_generator(show_errors=True)
-        if generator is None:
-            return ""
-
-        pieces: List[str] = []
-        attempts = 0
-        while (
-            len(" ".join(pieces)) < target_length
-            and attempts < RANDOM_MAX_GENERATIONS
-        ):
-            snippet = self._sample_transformer_text(generator)
-            attempts += 1
-            if not snippet:
-                continue
-            pieces.append(snippet)
-
-        combined = " ".join(pieces).strip()
-        if not combined:
-            return ""
-
-        return self._trim_generated_text(combined, target_length)
-
-
-    def _sample_transformer_text(
-        self,
-        generator: TextGenerationPipeline
-    ) -> str:
-        """
-        Sample a short passage from the text-generation pipeline.
-        """
-        prompt = self._build_generator_prompt(generator)
-        try:
-            outputs = generator(
-                prompt,
-                max_length=TEXT_GENERATION_MAX_LENGTH,
-                do_sample=True,
-                temperature=TEXT_GENERATION_TEMPERATURE,
-                top_p=TEXT_GENERATION_TOP_P,
-                top_k=TEXT_GENERATION_TOP_K,
-                num_return_sequences=1,
-                pad_token_id=generator.tokenizer.eos_token_id
-            )
-        except Exception:
-            return ""
-
-        if not outputs:
-            return ""
-
-        text = outputs[0].get("generated_text", "")
-        if prompt and text.startswith(prompt):
-            text = text[len(prompt):]
-
-        return " ".join(text.split()).strip()
-
-
-    def _build_generator_prompt(
-        self,
-        generator: TextGenerationPipeline
-    ) -> str:
-        """
-        Derive a simple prompt for the model, preferring its BOS token.
-        """
-        bos = getattr(generator.tokenizer, "bos_token", None)
-        if bos:
-            return bos
-
-        return random.choice(["The", "A", "One", "This"]) + " "
-
-
-    @staticmethod
-    def _trim_generated_text(text: str, limit: int) -> str:
-        """
-        Trim generated text to the configured character limit with sentence awareness.
-        """
-        if len(text) <= limit:
-            return text
-
-        truncated = text[:limit]
-        last_sentence_end = max(
-            truncated.rfind("."),
-            truncated.rfind("!"),
-            truncated.rfind("?")
-        )
-        if last_sentence_end >= limit // 2:
-            truncated = truncated[:last_sentence_end + 1]
-
-        return truncated.strip()
 
 
     def _format_target_text(self, lines: List[str]) -> str:
