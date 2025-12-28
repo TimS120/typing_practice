@@ -298,14 +298,125 @@ class TypingTrainerApp(PlotMixin):
         self.master.columnconfigure(0, weight=1)
         self.master.rowconfigure(0, weight=1)
 
+        self.info_text_var = tk.StringVar(
+            master=self.master,
+            value="Select a text on the left and click Load."
+        )
+        self.stats_summary_var = tk.StringVar(
+            master=self.master,
+            value="Time: 0.0 s  |  WPM: 0.0  |  Errors: 0  |  Error %: 0.0"
+        )
+
+        self.display_text_widgets: dict[str, tk.Text] = {}
+        self.input_text_widgets: dict[str, tk.Text] = {}
+
         main_frame = ttk.Frame(self.master, padding=10)
         main_frame.grid(row=0, column=0, sticky="nsew")
-        main_frame.columnconfigure(0, weight=0)
-        main_frame.columnconfigure(1, weight=1)
+        main_frame.columnconfigure(0, weight=1)
+        main_frame.rowconfigure(0, weight=0)
         main_frame.rowconfigure(1, weight=1)
+        main_frame.rowconfigure(2, weight=0)
+        main_frame.rowconfigure(3, weight=0)
 
-        list_frame = ttk.Frame(main_frame)
-        list_frame.grid(row=0, column=0, rowspan=3, sticky="ns", padx=(0, 10))
+        header_frame = ttk.Frame(main_frame)
+        header_frame.grid(row=0, column=0, sticky="ew")
+        header_frame.columnconfigure(3, weight=1)
+        header_frame.columnconfigure(4, weight=0)
+
+        self.dark_mode_toggle = ttk.Checkbutton(
+            header_frame,
+            text="Dark mode",
+            variable=self.dark_mode_var,
+            command=self.toggle_dark_mode
+        )
+        self.dark_mode_toggle.grid(row=0, column=0, sticky="w")
+
+        sudden_death_mode_values = [
+            label for _, label in SUDDEN_DEATH_MODE_OPTIONS
+        ]
+        sd_mode_label = ttk.Label(header_frame, text="Mode:")
+        sd_mode_label.grid(row=0, column=1, padx=(10, 0), sticky="w")
+        self.sudden_death_mode_combobox = ttk.Combobox(
+            header_frame,
+            textvariable=self.sudden_death_mode_var,
+            values=sudden_death_mode_values,
+            state="readonly",
+            width=14
+        )
+        self.sudden_death_mode_combobox.grid(row=0, column=2, padx=(5, 0), sticky="w")
+        self.sudden_death_mode_combobox.bind(
+            "<<ComboboxSelected>>",
+            self.on_sudden_death_mode_change
+        )
+
+        training_toggle = ttk.Checkbutton(
+            header_frame,
+            text="Training run",
+            variable=self.training_run_var
+        )
+        training_toggle.grid(row=0, column=3, padx=(10, 0), sticky="w")
+
+        font_controls = ttk.Frame(header_frame)
+        font_controls.grid(row=0, column=4, sticky="e")
+        font_smaller_button = ttk.Button(
+            font_controls,
+            text="T-",
+            width=3,
+            command=self.decrease_font_size
+        )
+        font_smaller_button.grid(row=0, column=0, padx=(0, 4))
+
+        font_reset_button = ttk.Button(
+            font_controls,
+            text="T0",
+            width=3,
+            command=self.reset_font_size
+        )
+        font_reset_button.grid(row=0, column=1, padx=4)
+
+        font_bigger_button = ttk.Button(
+            font_controls,
+            text="T+",
+            width=3,
+            command=self.increase_font_size
+        )
+        font_bigger_button.grid(row=0, column=2, padx=(4, 0))
+
+        self.tab_control = ttk.Notebook(main_frame)
+        self.tab_control.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
+
+        typing_tab = ttk.Frame(self.tab_control)
+        typing_tab.columnconfigure(0, weight=1)
+        typing_tab.rowconfigure(1, weight=1)
+        self.tab_control.add(typing_tab, text="Typing text")
+
+        typing_header = ttk.Frame(typing_tab)
+        typing_header.grid(row=0, column=0, sticky="ew")
+        typing_header.columnconfigure(0, weight=1)
+        typing_header.columnconfigure(1, weight=0)
+
+        self.info_label = ttk.Label(
+            typing_header,
+            textvariable=self.info_text_var
+        )
+        self.info_label.grid(row=0, column=0, sticky="w")
+
+        self.wpm_label = ttk.Label(
+            typing_header,
+            textvariable=self.stats_summary_var
+        )
+        self.wpm_label.grid(row=0, column=1, sticky="e")
+
+        typing_content = ttk.Frame(typing_tab)
+        typing_content.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
+        typing_content.columnconfigure(0, weight=0)
+        typing_content.columnconfigure(1, weight=1)
+        typing_content.rowconfigure(0, weight=1)
+
+        list_frame = ttk.Frame(typing_content)
+        list_frame.grid(row=0, column=0, sticky="ns", padx=(0, 10))
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(1, weight=1)
 
         ttk.Label(list_frame, text="Available texts").grid(
             row=0,
@@ -348,92 +459,21 @@ class TypingTrainerApp(PlotMixin):
         )
         random_button.grid(row=0, column=1, sticky="ew", padx=(4, 0))
 
-        right_frame = ttk.Frame(main_frame)
-        right_frame.grid(row=0, column=1, sticky="nsew")
-        right_frame.columnconfigure(0, weight=1)
-        right_frame.rowconfigure(2, weight=1)
+        typing_text_area = ttk.Frame(typing_content)
+        typing_text_area.grid(row=0, column=1, sticky="nsew")
+        typing_text_area.columnconfigure(0, weight=1)
+        typing_text_area.rowconfigure(0, weight=1)
+        typing_text_area.rowconfigure(1, weight=1)
 
-        top_right_frame = ttk.Frame(right_frame)
-        top_right_frame.grid(row=0, column=0, sticky="ew")
-        top_right_frame.columnconfigure(0, weight=1)
-        top_right_frame.columnconfigure(1, weight=0)
-        top_right_frame.columnconfigure(2, weight=0)
-        top_right_frame.columnconfigure(3, weight=0)
-        top_right_frame.columnconfigure(4, weight=0)
-        top_right_frame.columnconfigure(5, weight=0)
-        top_right_frame.columnconfigure(6, weight=0)
-
-        self.info_label = ttk.Label(
-            top_right_frame,
-            text="Select a text on the left and click Load."
-        )
-        self.info_label.grid(row=0, column=0, sticky="w", pady=(0, 5))
-
-        # Font size control buttons
-        font_smaller_button = ttk.Button(
-            top_right_frame,
-            text="T-",
-            width=3,
-            command=self.decrease_font_size
-        )
-        font_smaller_button.grid(row=0, column=1, padx=(5, 2), sticky="e")
-
-        font_reset_button = ttk.Button(
-            top_right_frame,
-            text="T0",
-            width=3,
-            command=self.reset_font_size
-        )
-        font_reset_button.grid(row=0, column=2, padx=2, sticky="e")
-
-        font_bigger_button = ttk.Button(
-            top_right_frame,
-            text="T+",
-            width=3,
-            command=self.increase_font_size
-        )
-        font_bigger_button.grid(row=0, column=3, padx=(2, 0), sticky="e")
-        self.dark_mode_toggle = ttk.Checkbutton(
-            top_right_frame,
-            text="Dark mode",
-            variable=self.dark_mode_var,
-            command=self.toggle_dark_mode
-        )
-        self.dark_mode_toggle.grid(row=0, column=4, padx=(10, 0), sticky="e")
-        sudden_death_mode_values = [
-            label for _, label in SUDDEN_DEATH_MODE_OPTIONS
-        ]
-        sd_mode_label = ttk.Label(top_right_frame, text="Mode:")
-        sd_mode_label.grid(row=0, column=5, padx=(10, 0), sticky="e")
-        self.sudden_death_mode_combobox = ttk.Combobox(
-            top_right_frame,
-            textvariable=self.sudden_death_mode_var,
-            values=sudden_death_mode_values,
-            state="readonly",
-            width=12
-        )
-        self.sudden_death_mode_combobox.grid(row=0, column=6, padx=(5, 0), sticky="e")
-        self.sudden_death_mode_combobox.bind(
-            "<<ComboboxSelected>>",
-            self.on_sudden_death_mode_change
-        )
-
-        self.wpm_label = ttk.Label(
-            right_frame,
-            text="Time: 0.0 s  |  WPM: 0.0  |  Errors: 0  |  Error %: 0.0"
-        )
-        self.wpm_label.grid(row=1, column=0, sticky="e")
-
-        self.display_text = tk.Text(
-            right_frame,
+        typing_display_text = tk.Text(
+            typing_text_area,
             height=6,
             width=TARGET_TEXT_DISPLAY_WIDTH,
             wrap="word",
             state="disabled"
         )
-        self.display_text.grid(row=2, column=0, sticky="nsew")
+        typing_display_text.grid(row=0, column=0, sticky="nsew")
 
-        # Block copying from the target text widget to force real typing of the user
         copy_commands = [
             "<<Copy>>",
             "<Control-c>",
@@ -443,126 +483,221 @@ class TypingTrainerApp(PlotMixin):
             "<Control-Insert>"
         ]
         for sequence in copy_commands:
-            self.display_text.bind(sequence, self._block_target_copy)
+            typing_display_text.bind(sequence, self._block_target_copy)
 
-        input_frame = ttk.LabelFrame(right_frame, text="Your input")
-        input_frame.grid(row=3, column=0, sticky="nsew", pady=(10, 0))
-        input_frame.columnconfigure(0, weight=1)
-        input_frame.rowconfigure(0, weight=1)
+        typing_input_frame = ttk.LabelFrame(typing_text_area, text="Your input")
+        typing_input_frame.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
+        typing_input_frame.columnconfigure(0, weight=1)
+        typing_input_frame.rowconfigure(0, weight=1)
 
-        self.input_text = tk.Text(
-            input_frame,
+        typing_input_text = tk.Text(
+            typing_input_frame,
             height=8,
             wrap="word"
         )
-        self.input_text.grid(row=0, column=0, sticky="nsew")
+        typing_input_text.grid(row=0, column=0, sticky="nsew")
 
-        # Tag for highlighting incorrect characters (also spaces)
-        self.input_text.tag_configure(
+        typing_input_text.tag_configure(
             "error",
             foreground="red",
             background="#ffcccc"
         )
 
-        self.input_text.bind("<Key>", self.on_key_press)
+        typing_input_text.bind("<Key>", self.on_key_press)
 
-        control_frame = ttk.Frame(right_frame)
-        control_frame.grid(row=4, column=0, sticky="ew", pady=(8, 0))
-        for idx in range(12):
-            control_frame.columnconfigure(idx, weight=0)
-        control_frame.columnconfigure(11, weight=1)
+        self.display_text_widgets["typing"] = typing_display_text
+        self.input_text_widgets["typing"] = typing_input_text
 
-        reset_button = ttk.Button(
-            control_frame,
-            text="Reset session",
-            command=self.handle_reset_button
-        )
-        reset_button.grid(row=0, column=0, padx=(0, 5))
+        helper_tab = ttk.Frame(self.tab_control)
+        helper_tab.columnconfigure(0, weight=1)
+        helper_tab.rowconfigure(2, weight=1)
+        self.tab_control.add(helper_tab, text="Helper modes")
 
-        training_toggle = ttk.Checkbutton(
-            control_frame,
-            text="Training run",
-            variable=self.training_run_var
-        )
-        training_toggle.grid(row=0, column=1, padx=(0, 5))
+        helper_header = ttk.Frame(helper_tab)
+        helper_header.grid(row=0, column=0, sticky="ew")
+        helper_header.columnconfigure(0, weight=1)
+        helper_header.columnconfigure(1, weight=0)
 
-        histogram_button = ttk.Button(
-            control_frame,
-            text="Typing text stats",
-            command=self.show_stats
-        )
-        histogram_button.grid(row=0, column=2, padx=(5, 0))
+        helper_mode_frame = ttk.Frame(helper_header)
+        helper_mode_frame.grid(row=0, column=0, sticky="w")
 
         letter_mode_button = ttk.Button(
-            control_frame,
+            helper_mode_frame,
             text="Letter mode",
             command=self.start_letter_mode
         )
-        letter_mode_button.grid(row=0, column=3, padx=(5, 0))
-
-        letter_stats_button = ttk.Button(
-            control_frame,
-            text="Letter stats",
-            command=self.show_letter_stats
-        )
-        letter_stats_button.grid(row=0, column=4, padx=(5, 0))
+        letter_mode_button.grid(row=0, column=0, padx=(0, 5))
 
         special_mode_button = ttk.Button(
-            control_frame,
-            text="Special char mode",
+            helper_mode_frame,
+            text="Character mode",
             command=self.start_special_mode
         )
-        special_mode_button.grid(row=0, column=5, padx=(5, 0))
-
-        special_stats_button = ttk.Button(
-            control_frame,
-            text="Special char stats",
-            command=self.show_special_stats
-        )
-        special_stats_button.grid(row=0, column=6, padx=(5, 0))
+        special_mode_button.grid(row=0, column=1, padx=5)
 
         number_mode_button = ttk.Button(
-            control_frame,
+            helper_mode_frame,
             text="Number mode",
             command=self.start_number_mode
         )
-        number_mode_button.grid(row=0, column=7, padx=(5, 0))
+        number_mode_button.grid(row=0, column=2, padx=(5, 0))
 
-        number_stats_button = ttk.Button(
-            control_frame,
-            text="Number stats",
-            command=self.show_number_stats
+        helper_stats_label = ttk.Label(
+            helper_header,
+            textvariable=self.stats_summary_var
         )
-        number_stats_button.grid(row=0, column=8, padx=(5, 0))
+        helper_stats_label.grid(row=0, column=1, sticky="e")
 
-        general_stats_button = ttk.Button(
-            control_frame,
-            text="General stats",
-            command=self.show_general_stats
+        self.helper_info_label = ttk.Label(
+            helper_tab,
+            textvariable=self.info_text_var
         )
-        general_stats_button.grid(row=0, column=9, padx=(5, 0))
+        self.helper_info_label.grid(row=1, column=0, sticky="w", pady=(5, 0))
 
-        stats_filter_label = ttk.Label(control_frame, text="Stats filter:")
-        stats_filter_label.grid(row=0, column=10, padx=(10, 0), sticky="e")
+        helper_text_area = ttk.Frame(helper_tab)
+        helper_text_area.grid(row=2, column=0, sticky="nsew", pady=(5, 0))
+        helper_text_area.columnconfigure(0, weight=1)
+        helper_text_area.rowconfigure(0, weight=1)
+        helper_text_area.rowconfigure(1, weight=1)
+
+        helper_display_text = tk.Text(
+            helper_text_area,
+            height=6,
+            width=TARGET_TEXT_DISPLAY_WIDTH,
+            wrap="word",
+            state="disabled"
+        )
+        helper_display_text.grid(row=0, column=0, sticky="nsew")
+
+        for sequence in copy_commands:
+            helper_display_text.bind(sequence, self._block_target_copy)
+
+        helper_input_frame = ttk.LabelFrame(helper_text_area, text="Your input")
+        helper_input_frame.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
+        helper_input_frame.columnconfigure(0, weight=1)
+        helper_input_frame.rowconfigure(0, weight=1)
+
+        helper_input_text = tk.Text(
+            helper_input_frame,
+            height=8,
+            wrap="word"
+        )
+        helper_input_text.grid(row=0, column=0, sticky="nsew")
+
+        helper_input_text.tag_configure(
+            "error",
+            foreground="red",
+            background="#ffcccc"
+        )
+
+        helper_input_text.bind("<Key>", self.on_key_press)
+
+        self.display_text_widgets["helper"] = helper_display_text
+        self.input_text_widgets["helper"] = helper_input_text
+
+        reset_frame = ttk.Frame(main_frame)
+        reset_frame.grid(row=2, column=0, sticky="w", pady=(10, 0))
+        reset_button = ttk.Button(
+            reset_frame,
+            text="Reset session",
+            command=self.handle_reset_button
+        )
+        reset_button.grid(row=0, column=0)
+
+        stats_frame = ttk.Frame(main_frame)
+        stats_frame.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        for col in range(7):
+            stats_frame.columnconfigure(col, weight=0)
+        stats_frame.columnconfigure(6, weight=1)
+
+        stats_filter_label = ttk.Label(stats_frame, text="Stats filter:")
+        stats_filter_label.grid(row=0, column=0, padx=(0, 5), sticky="w")
 
         stats_filter_values = [label for _, label in STATS_FILTER_OPTIONS]
         self.stats_filter_combobox = ttk.Combobox(
-            control_frame,
+            stats_frame,
             textvariable=self.stats_filter_var,
             values=stats_filter_values,
             state="readonly",
             width=18
         )
-        self.stats_filter_combobox.grid(row=0, column=11, padx=(5, 0), sticky="ew")
+        self.stats_filter_combobox.grid(row=0, column=1, padx=(0, 10), sticky="w")
 
-        # Initialize shared font for both text widgets
+        histogram_button = ttk.Button(
+            stats_frame,
+            text="Typing text stats",
+            command=self.show_stats
+        )
+        histogram_button.grid(row=0, column=2, padx=(0, 5))
+
+        letter_stats_button = ttk.Button(
+            stats_frame,
+            text="Letter stats",
+            command=self.show_letter_stats
+        )
+        letter_stats_button.grid(row=0, column=3, padx=5)
+
+        special_stats_button = ttk.Button(
+            stats_frame,
+            text="Special char stats",
+            command=self.show_special_stats
+        )
+        special_stats_button.grid(row=0, column=4, padx=5)
+
+        number_stats_button = ttk.Button(
+            stats_frame,
+            text="Number stats",
+            command=self.show_number_stats
+        )
+        number_stats_button.grid(row=0, column=5, padx=5)
+
+        general_stats_button = ttk.Button(
+            stats_frame,
+            text="General stats",
+            command=self.show_general_stats
+        )
+        general_stats_button.grid(row=0, column=6, padx=(5, 0), sticky="e")
+
+        self._tab_frames = {
+            "typing": typing_tab,
+            "helper": helper_tab
+        }
+        self._active_tab_key = "typing"
+        self.display_text = self.display_text_widgets[self._active_tab_key]
+        self.input_text = self.input_text_widgets[self._active_tab_key]
+        self.tab_control.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+
         self.text_font = tkfont.Font(
             family=DEFAULT_FONT_FAMILY,
             size=self.current_font_size
         )
-        self.display_text.configure(font=self.text_font)
-        self.input_text.configure(font=self.text_font)
+        for widget in self.display_text_widgets.values():
+            widget.configure(font=self.text_font)
+        for widget in self.input_text_widgets.values():
+            widget.configure(font=self.text_font)
         self._apply_theme()
+
+    def _on_tab_changed(self, event: tk.Event) -> None:
+        """
+        Adjust layout whenever the notebook tab selection changes.
+        """
+        tab_id = self.tab_control.select()
+        for key, frame in self._tab_frames.items():
+            if str(frame) == tab_id:
+                self._set_active_tab(key)
+                break
+
+    def _set_active_tab(self, tab_key: str) -> None:
+        """
+        Switch the active tab bookkeeping and shared widgets.
+        """
+        if tab_key == self._active_tab_key:
+            return
+        self._active_tab_key = tab_key
+        self.display_text = self.display_text_widgets[tab_key]
+        self.input_text = self.input_text_widgets[tab_key]
+        self._update_input_visibility()
+        self._update_blind_target_indicator()
 
     def _get_stats_filter_key(self) -> str:
         """
@@ -666,12 +801,12 @@ class TypingTrainerApp(PlotMixin):
             self.reset_session(clear_display=False)
         self.active_mode_key = mode_key
         if mode_key == "blind":
-            self.info_label.configure(
-                text="Blind mode enabled. Load a text or start a mode."
+            self.info_text_var.set(
+                "Blind mode enabled. Load a text or start a mode."
             )
         elif mode_key == "standard" and not self.is_sudden_death_active():
-            self.info_label.configure(
-                text="Standard mode active. Load a text or start a mode."
+            self.info_text_var.set(
+                "Standard mode active. Load a text or start a mode."
             )
         self._update_input_visibility()
         self._update_blind_target_indicator()
@@ -687,12 +822,12 @@ class TypingTrainerApp(PlotMixin):
         self._update_input_visibility()
         self._update_blind_target_indicator()
         if enabled:
-            self.info_label.configure(
-                text="Sudden death enabled. Load a text or start a mode."
+            self.info_text_var.set(
+                "Sudden death enabled. Load a text or start a mode."
             )
         else:
-            self.info_label.configure(
-                text="Sudden death disabled. Normal sessions restored."
+            self.info_text_var.set(
+                "Sudden death disabled. Normal sessions restored."
             )
 
     def _update_input_visibility(self) -> None:
@@ -839,34 +974,36 @@ class TypingTrainerApp(PlotMixin):
         )
 
         # Classic Tk widgets require manual configuration.
-        self.display_text.configure(
-            background=theme["surface"],
-            foreground=theme["text"],
-            insertbackground=theme["text"],
-            highlightbackground=theme["border"],
-            highlightcolor=theme["accent"],
-            selectbackground=theme["select_background"],
-            selectforeground=theme["select_foreground"]
-        )
-        self.input_text.configure(
-            background=theme["input_background"],
-            foreground=theme["input_foreground"],
-            insertbackground=theme["text"],
-            highlightbackground=theme["border"],
-            highlightcolor=theme["accent"],
-            selectbackground=theme["select_background"],
-            selectforeground=theme["select_foreground"]
-        )
-        self.input_text.tag_configure(
-            "error",
-            foreground=theme["error_foreground"],
-            background=theme["error_background"]
-        )
-        self.display_text.tag_configure(
-            BLIND_CURSOR_TAG,
-            background=theme["blind_highlight"],
-            foreground=theme["text"]
-        )
+        for display in self.display_text_widgets.values():
+            display.configure(
+                background=theme["surface"],
+                foreground=theme["text"],
+                insertbackground=theme["text"],
+                highlightbackground=theme["border"],
+                highlightcolor=theme["accent"],
+                selectbackground=theme["select_background"],
+                selectforeground=theme["select_foreground"]
+            )
+            display.tag_configure(
+                BLIND_CURSOR_TAG,
+                background=theme["blind_highlight"],
+                foreground=theme["text"]
+            )
+        for input_widget in self.input_text_widgets.values():
+            input_widget.configure(
+                background=theme["input_background"],
+                foreground=theme["input_foreground"],
+                insertbackground=theme["text"],
+                highlightbackground=theme["border"],
+                highlightcolor=theme["accent"],
+                selectbackground=theme["select_background"],
+                selectforeground=theme["select_foreground"]
+            )
+            input_widget.tag_configure(
+                "error",
+                foreground=theme["error_foreground"],
+                background=theme["error_background"]
+            )
         self.text_listbox.configure(
             background=theme["surface"],
             foreground=theme["text"],
@@ -1149,8 +1286,8 @@ class TypingTrainerApp(PlotMixin):
         self.display_text.configure(state="disabled")
         self._update_blind_target_indicator(0)
 
-        self.info_label.configure(
-            text="Start typing in the input area. WPM starts with the "
+        self.info_text_var.set(
+            "Start typing in the input area. WPM starts with the "
             "first key."
         )
 
@@ -1222,8 +1359,8 @@ class TypingTrainerApp(PlotMixin):
         if exit_letter_mode and exit_number_mode and exit_special_mode:
             self.last_session_mode = "typing"
 
-        self.wpm_label.configure(
-            text="Time: 0.0 s  |  WPM: 0.0  |  Errors: 0  |  Error %: 0.0"
+        self.stats_summary_var.set(
+            "Time: 0.0 s  |  WPM: 0.0  |  Errors: 0  |  Error %: 0.0"
         )
 
         if self.update_job_id is not None:
@@ -1273,7 +1410,7 @@ class TypingTrainerApp(PlotMixin):
             info_text = (
                 "Letter mode: random letters (upper/lower). Progress 0/100."
             )
-        self.info_label.configure(text=info_text)
+        self.info_text_var.set(info_text)
         self._update_letter_display()
         self.update_letter_status_label()
         self.last_session_mode = "letter"
@@ -1437,10 +1574,10 @@ class TypingTrainerApp(PlotMixin):
                     f"Letter mode: type the {letter_type} letter shown "
                     f"({self.letter_index}/{self.letter_total_letters})"
                 )
-            self.info_label.configure(text=progress)
+            self.info_text_var.set(progress)
         else:
-            self.info_label.configure(
-                text="Letter mode: No active letter. Click the button to start."
+            self.info_text_var.set(
+                "Letter mode: No active letter. Click the button to start."
             )
 
         self.display_text.configure(state="disabled")
@@ -1472,13 +1609,11 @@ class TypingTrainerApp(PlotMixin):
         else:
             error_text = f"Errors: {self.letter_errors}"
 
-        self.wpm_label.configure(
-            text=(
-                f"Letter mode  |  Time: {elapsed_seconds:.1f} s  |  "
-                f"Letters/min: {letters_per_minute:.1f}  |  "
-                f"Progress: {progress}  |  "
-                f"{error_text}"
-            )
+        self.stats_summary_var.set(
+            f"Letter mode  |  Time: {elapsed_seconds:.1f} s  |  "
+            f"Letters/min: {letters_per_minute:.1f}  |  "
+            f"Progress: {progress}  |  "
+            f"{error_text}"
         )
 
 
@@ -1607,8 +1742,8 @@ class TypingTrainerApp(PlotMixin):
         self.display_text.insert("1.0", display_content)
         self.display_text.configure(state="disabled")
 
-        self.info_label.configure(text=info_message)
-        self.wpm_label.configure(text=summary)
+        self.info_text_var.set(info_message)
+        self.stats_summary_var.set(summary)
 
         self._display_sequence_result(
             typed_letters_text,
@@ -1658,7 +1793,7 @@ class TypingTrainerApp(PlotMixin):
             info_text = (
                 "Special character mode: focus on punctuation and symbols. Progress 0/100."
             )
-        self.info_label.configure(text=info_text)
+        self.info_text_var.set(info_text)
         self._update_special_display()
         self.update_special_status_label()
         self.last_session_mode = "special"
@@ -1814,10 +1949,10 @@ class TypingTrainerApp(PlotMixin):
                     "Special character mode: type the symbol shown "
                     f"({self.special_index}/{self.special_total_chars})"
                 )
-            self.info_label.configure(text=progress)
+            self.info_text_var.set(progress)
         else:
-            self.info_label.configure(
-                text="Special character mode: No active symbol. Click the button to start."
+            self.info_text_var.set(
+                "Special character mode: No active symbol. Click the button to start."
             )
 
         self.display_text.configure(state="disabled")
@@ -1848,13 +1983,11 @@ class TypingTrainerApp(PlotMixin):
         else:
             error_text = f"Errors: {self.special_errors}"
 
-        self.wpm_label.configure(
-            text=(
-                f"Special char mode  |  Time: {elapsed_seconds:.1f} s  |  "
-                f"Symbols/min: {symbols_per_minute:.1f}  |  "
-                f"Progress: {progress}  |  "
-                f"{error_text}"
-            )
+        self.stats_summary_var.set(
+            f"Special char mode  |  Time: {elapsed_seconds:.1f} s  |  "
+            f"Symbols/min: {symbols_per_minute:.1f}  |  "
+            f"Progress: {progress}  |  "
+            f"{error_text}"
         )
 
     def finish_special_mode_session(self, sudden_death: bool = False) -> None:
@@ -1982,8 +2115,8 @@ class TypingTrainerApp(PlotMixin):
         self.display_text.insert("1.0", display_content)
         self.display_text.configure(state="disabled")
 
-        self.info_label.configure(text=info_message)
-        self.wpm_label.configure(text=summary)
+        self.info_text_var.set(info_message)
+        self.stats_summary_var.set(summary)
 
         self._display_sequence_result(
             typed_symbols_text,
@@ -2033,7 +2166,7 @@ class TypingTrainerApp(PlotMixin):
             info_text = (
                 "Number mode: type digits with the numeric keypad. Progress 0/100."
             )
-        self.info_label.configure(text=info_text)
+        self.info_text_var.set(info_text)
         self._update_number_display()
         self.update_number_status_label()
         self.last_session_mode = "number"
@@ -2191,10 +2324,10 @@ class TypingTrainerApp(PlotMixin):
                     f"Number mode: type the digit shown "
                     f"({self.number_index}/{self.number_total_digits})"
                 )
-            self.info_label.configure(text=progress)
+            self.info_text_var.set(progress)
         else:
-            self.info_label.configure(
-                text="Number mode: No active digit. Click the button to start."
+            self.info_text_var.set(
+                "Number mode: No active digit. Click the button to start."
             )
 
         self.display_text.configure(state="disabled")
@@ -2226,13 +2359,11 @@ class TypingTrainerApp(PlotMixin):
         else:
             error_text = f"Errors: {self.number_errors}"
 
-        self.wpm_label.configure(
-            text=(
-                f"Number mode  |  Time: {elapsed_seconds:.1f} s  |  "
-                f"Digits/min: {digits_per_minute:.1f}  |  "
-                f"Progress: {progress}  |  "
-                f"{error_text}"
-            )
+        self.stats_summary_var.set(
+            f"Number mode  |  Time: {elapsed_seconds:.1f} s  |  "
+            f"Digits/min: {digits_per_minute:.1f}  |  "
+            f"Progress: {progress}  |  "
+            f"{error_text}"
         )
 
 
@@ -2361,8 +2492,8 @@ class TypingTrainerApp(PlotMixin):
         self.display_text.insert("1.0", display_content)
         self.display_text.configure(state="disabled")
 
-        self.info_label.configure(text=info_message)
-        self.wpm_label.configure(text=summary)
+        self.info_text_var.set(info_message)
+        self.stats_summary_var.set(summary)
 
         self._display_sequence_result(
             typed_digits_text,
@@ -2412,8 +2543,8 @@ class TypingTrainerApp(PlotMixin):
             return
 
         if self.target_text == "":
-            self.info_label.configure(
-                text="Please select and load a text before typing."
+            self.info_text_var.set(
+                "Please select and load a text before typing."
             )
             return
 
@@ -2600,21 +2731,17 @@ class TypingTrainerApp(PlotMixin):
                 is_training_run=self.training_run_var.get()
             )
 
-        self.info_label.configure(
-            text=(
-                f"Sudden death failed after {safe_index} characters. "
-                "Load a text to try again."
-            )
+        self.info_text_var.set(
+            f"Sudden death failed after {safe_index} characters. "
+            "Load a text to try again."
         )
-        self.wpm_label.configure(
-            text=(
-                f"Sudden death  |  Time: {elapsed_seconds:.1f} s  |  "
-                f"Correct chars: {safe_index}  |  WPM: {wpm:.1f}"
-                + (
-                    f"  |  End error %: {blind_end_error_percentage:.1f}"
-                    if blind_end_error_percentage is not None
-                    else ""
-                )
+        self.stats_summary_var.set(
+            f"Sudden death  |  Time: {elapsed_seconds:.1f} s  |  "
+            f"Correct chars: {safe_index}  |  WPM: {wpm:.1f}"
+            + (
+                f"  |  End error %: {blind_end_error_percentage:.1f}"
+                if blind_end_error_percentage is not None
+                else ""
             )
         )
         if self.is_blind_mode_active():
@@ -2637,7 +2764,7 @@ class TypingTrainerApp(PlotMixin):
                 text = "Time: 0.0 s  |  WPM: 0.0"
             else:
                 text = "Time: 0.0 s  |  WPM: 0.0  |  Errors: 0  |  Error %: 0.0"
-            self.wpm_label.configure(text=text)
+            self.stats_summary_var.set(text)
             return
 
         elapsed_seconds = max(time.time() - self.start_time, 0.0001)
@@ -2655,15 +2782,13 @@ class TypingTrainerApp(PlotMixin):
         else:
             error_percentage = (errors / total_typed) * 100.0
 
-        self.wpm_label.configure(
-            text=(
-                f"Time: {elapsed_seconds:.1f} s  |  "
-                f"WPM: {wpm:.1f}  |  "
-                + (
-                    "Errors: hidden  |  Error %: hidden"
-                    if self.is_blind_mode_active()
-                    else f"Errors: {errors}  |  Error %: {error_percentage:.1f}"
-                )
+        self.stats_summary_var.set(
+            f"Time: {elapsed_seconds:.1f} s  |  "
+            f"WPM: {wpm:.1f}  |  "
+            + (
+                "Errors: hidden  |  Error %: hidden"
+                if self.is_blind_mode_active()
+                else f"Errors: {errors}  |  Error %: {error_percentage:.1f}"
             )
         )
 
@@ -2725,18 +2850,16 @@ class TypingTrainerApp(PlotMixin):
                     completed=True,
                     is_training_run=self.training_run_var.get()
                 )
-            self.info_label.configure(
-                text="Sudden death complete. Start another run when ready."
+            self.info_text_var.set(
+                "Sudden death complete. Start another run when ready."
             )
-            self.wpm_label.configure(
-                text=(
-                    f"Sudden death  |  Time: {elapsed_seconds:.1f} s  |  "
-                    f"WPM: {wpm:.1f}  |  Correct chars: {target_length}"
-                    + (
-                        f"  |  End error %: {end_error_percentage:.1f}"
-                        if end_error_percentage is not None
-                        else ""
-                    )
+            self.stats_summary_var.set(
+                f"Sudden death  |  Time: {elapsed_seconds:.1f} s  |  "
+                f"WPM: {wpm:.1f}  |  Correct chars: {target_length}"
+                + (
+                    f"  |  End error %: {end_error_percentage:.1f}"
+                    if end_error_percentage is not None
+                    else ""
                 )
             )
             if self.is_blind_mode_active():
@@ -2783,7 +2906,7 @@ class TypingTrainerApp(PlotMixin):
                     f"WPM: {wpm:.1f}  |  Errors: {errors}  |  "
                     f"Error %: {error_percentage:.1f}"
                 )
-            self.wpm_label.configure(text=summary)
+            self.stats_summary_var.set(summary)
 
 
     def show_result(self) -> None:
