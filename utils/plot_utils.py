@@ -396,7 +396,7 @@ class PlotMixin:
 
         ax_speed = fig.add_subplot(grid_spec[0, 0])
         ax_correct = fig.add_subplot(grid_spec[0, 1])
-        ax_3d = fig.add_subplot(grid_spec[1, :], projection="3d")
+        ax_heatmap = fig.add_subplot(grid_spec[1, :])
         ax_time = fig.add_subplot(grid_spec[2, :])
         ax_time_spent = fig.add_subplot(grid_spec[3, :])
         ax_time_spent_right = ax_time_spent.twinx()
@@ -447,75 +447,53 @@ class PlotMixin:
                 correct_arr,
                 bins=[x_edges, y_edges]
             )
-            x_positions = xedges[:-1]
-            y_positions = yedges[:-1]
-            x_sizes = np.diff(xedges)
-            y_sizes = np.diff(yedges)
-            xpos, ypos = np.meshgrid(
-                x_positions,
-                y_positions,
-                indexing="ij"
+            cmap = mcolors.LinearSegmentedColormap.from_list(
+                "speed_correct_heatmap",
+                [
+                    palette["heatmap_low_color"],
+                    palette["heatmap_high_color"]
+                ]
             )
-            dx, dy = np.meshgrid(
-                x_sizes,
-                y_sizes,
-                indexing="ij"
-            )
-            xpos = xpos.ravel()
-            ypos = ypos.ravel()
-            dx = dx.ravel()
-            dy = dy.ravel()
-            dz = hist.ravel()
-            nonzero = dz > 0
-            xpos = xpos[nonzero]
-            ypos = ypos[nonzero]
-            dx = dx[nonzero]
-            dy = dy[nonzero]
-            dz = dz[nonzero]
-            if dz.size > 0:
-                ax_3d.bar3d(
-                    xpos,
-                    ypos,
-                    np.zeros_like(dz),
-                    dx,
-                    dy,
-                    dz,
-                    shade=True,
-                    color=palette["bar3d_color"]
+            if np.any(hist > 0):
+                im = ax_heatmap.pcolormesh(
+                    xedges,
+                    yedges,
+                    hist.T,
+                    cmap=cmap,
+                    shading="auto"
                 )
+                colorbar = fig.colorbar(im, ax=ax_heatmap, pad=0.02)
+                colorbar.set_label("Count")
             else:
-                ax_3d.text(
-                    0.5,
+                ax_heatmap.text(
                     0.5,
                     0.5,
                     "No combined data available",
                     ha="center",
                     va="center",
+                    transform=ax_heatmap.transAxes,
                     color=palette["text_color"]
                 )
-                ax_3d.set_xticks([])
-                ax_3d.set_yticks([])
-                ax_3d.set_zticks([])
+                ax_heatmap.set_xticks([])
+                ax_heatmap.set_yticks([])
         else:
-            ax_3d.text(
-                0.5,
+            ax_heatmap.text(
                 0.5,
                 0.5,
                 "No combined data available",
                 ha="center",
                 va="center",
+                transform=ax_heatmap.transAxes,
                 color=palette["text_color"]
             )
-            ax_3d.set_xticks([])
-            ax_3d.set_yticks([])
-            ax_3d.set_zticks([])
+            ax_heatmap.set_xticks([])
+            ax_heatmap.set_yticks([])
 
-        ax_3d.set_title(
+        ax_heatmap.set_title(
             f"Joint {speed_short_label} / {correct_label.lower()} distribution"
         )
-        ax_3d.set_xlabel(speed_short_label)
-        ax_3d.set_ylabel(correct_label)
-        ax_3d.set_zlabel("Count")
+        ax_heatmap.set_xlabel(speed_short_label)
+        ax_heatmap.set_ylabel(correct_label)
 
         if daily_dates:
             positions = np.arange(len(daily_dates))
@@ -768,7 +746,7 @@ class PlotMixin:
 
         ax_speed = fig.add_subplot(grid_spec[0, 0])
         ax_error = fig.add_subplot(grid_spec[0, 1])
-        ax_3d = fig.add_subplot(grid_spec[1, :], projection="3d")
+        ax_heatmap = fig.add_subplot(grid_spec[1, :])
         ax_time = fig.add_subplot(grid_spec[2, :])
         ax_time_spent = fig.add_subplot(grid_spec[3, :])
         ax_time_spent_right = ax_time_spent.twinx()
@@ -821,85 +799,54 @@ class PlotMixin:
                 error_arr,
                 bins=[x_edges, y_edges]
             )
-
-            x_positions = xedges[:-1]
-            y_positions = yedges[:-1]
-            x_sizes = np.diff(xedges)
-            y_sizes = np.diff(yedges)
-
-            xpos, ypos = np.meshgrid(
-                x_positions,
-                y_positions,
-                indexing="ij"
-            )
-            dx, dy = np.meshgrid(
-                x_sizes,
-                y_sizes,
-                indexing="ij"
+            cmap = mcolors.LinearSegmentedColormap.from_list(
+                "speed_error_heatmap",
+                [
+                    palette["heatmap_low_color"],
+                    palette["heatmap_high_color"]
+                ]
             )
 
-            xpos = xpos.ravel()
-            ypos = ypos.ravel()
-            dx = dx.ravel()
-            dy = dy.ravel()
-            dz = hist.ravel()
-
-            nonzero = dz > 0
-            xpos = xpos[nonzero]
-            ypos = ypos[nonzero]
-            dx = dx[nonzero]
-            dy = dy[nonzero]
-            dz = dz[nonzero]
-
-            if dz.size > 0:
-                ax_3d.bar3d(
-                    xpos,
-                    ypos,
-                    np.zeros_like(dz),
-                    dx,
-                    dy,
-                    dz,
-                    shade=True,
-                    color=palette["bar3d_color"]
+            if np.any(hist > 0):
+                im = ax_heatmap.pcolormesh(
+                    xedges,
+                    yedges,
+                    hist.T,
+                    cmap=cmap,
+                    shading="auto"
                 )
-                ax_3d.set_title(
-                    f"Joint {speed_short_label} / end error distribution"
-                )
-                ax_3d.set_xlabel(speed_short_label)
-                ax_3d.set_ylabel("End error percentage (%)")
-                ax_3d.set_zlabel("Count")
+                colorbar = fig.colorbar(im, ax=ax_heatmap, pad=0.02)
+                colorbar.set_label("Count")
             else:
-                ax_3d.set_title(
-                    f"Joint {speed_short_label} / end error distribution"
-                )
-                ax_3d.text(
-                    0.5,
+                ax_heatmap.text(
                     0.5,
                     0.5,
                     "No combined data available",
                     ha="center",
                     va="center",
+                    transform=ax_heatmap.transAxes,
                     color=palette["text_color"]
                 )
-                ax_3d.set_xticks([])
-                ax_3d.set_yticks([])
-                ax_3d.set_zticks([])
+                ax_heatmap.set_xticks([])
+                ax_heatmap.set_yticks([])
         else:
-            ax_3d.set_title(
-                f"Joint {speed_short_label} / end error distribution"
-            )
-            ax_3d.text(
-                0.5,
+            ax_heatmap.text(
                 0.5,
                 0.5,
                 "No combined data available",
                 ha="center",
                 va="center",
+                transform=ax_heatmap.transAxes,
                 color=palette["text_color"]
             )
-            ax_3d.set_xticks([])
-            ax_3d.set_yticks([])
-            ax_3d.set_zticks([])
+            ax_heatmap.set_xticks([])
+            ax_heatmap.set_yticks([])
+
+        ax_heatmap.set_title(
+            f"Joint {speed_short_label} / end error distribution"
+        )
+        ax_heatmap.set_xlabel(speed_short_label)
+        ax_heatmap.set_ylabel("End error percentage (%)")
 
         if daily_dates:
             positions = np.arange(len(daily_dates))
@@ -1016,7 +963,7 @@ class PlotMixin:
 
     def show_stats(self) -> None:
         """
-        Show histograms of WPM, error percentage, and a 3D joint histogram
+        Show histograms of WPM, error percentage, and a joint heatmap
         in a single Matplotlib figure.
 
         If no statistics file exists or no valid values can be read, an
@@ -1166,7 +1113,7 @@ class PlotMixin:
 
         ax_wpm = fig.add_subplot(grid_spec[0, 0])
         ax_error = fig.add_subplot(grid_spec[0, 1])
-        ax_3d = fig.add_subplot(grid_spec[1, :], projection="3d")
+        ax_heatmap = fig.add_subplot(grid_spec[1, :])
         ax_time = fig.add_subplot(grid_spec[2, :])
         ax_time_spent = fig.add_subplot(grid_spec[3, :])
         ax_time_spent_right = ax_time_spent.twinx()
@@ -1219,79 +1166,52 @@ class PlotMixin:
                 error_arr,
                 bins=[x_edges, y_edges]
             )
-
-            x_positions = xedges[:-1]
-            y_positions = yedges[:-1]
-            x_sizes = np.diff(xedges)
-            y_sizes = np.diff(yedges)
-
-            xpos, ypos = np.meshgrid(
-                x_positions,
-                y_positions,
-                indexing="ij"
-            )
-            dx, dy = np.meshgrid(
-                x_sizes,
-                y_sizes,
-                indexing="ij"
+            cmap = mcolors.LinearSegmentedColormap.from_list(
+                "wpm_error_heatmap",
+                [
+                    palette["heatmap_low_color"],
+                    palette["heatmap_high_color"]
+                ]
             )
 
-            xpos = xpos.ravel()
-            ypos = ypos.ravel()
-            dx = dx.ravel()
-            dy = dy.ravel()
-            dz = hist.ravel()
-
-            nonzero = dz > 0
-            xpos = xpos[nonzero]
-            ypos = ypos[nonzero]
-            dx = dx[nonzero]
-            dy = dy[nonzero]
-            dz = dz[nonzero]
-
-            if dz.size > 0:
-                ax_3d.bar3d(
-                    xpos,
-                    ypos,
-                    np.zeros_like(dz),
-                    dx,
-                    dy,
-                    dz,
-                    shade=True,
-                    color=palette["bar3d_color"]
+            if np.any(hist > 0):
+                im = ax_heatmap.pcolormesh(
+                    xedges,
+                    yedges,
+                    hist.T,
+                    cmap=cmap,
+                    shading="auto"
                 )
-                ax_3d.set_title("Joint WPM / error percentage distribution")
-                ax_3d.set_xlabel("WPM")
-                ax_3d.set_ylabel("Error percentage (%)")
-                ax_3d.set_zlabel("Count")
+                colorbar = fig.colorbar(im, ax=ax_heatmap, pad=0.02)
+                colorbar.set_label("Count")
             else:
-                ax_3d.set_title("Joint WPM / error percentage distribution")
-                ax_3d.text(
-                    0.5,
+                ax_heatmap.text(
                     0.5,
                     0.5,
                     "No combined WPM/error data available",
                     ha="center",
                     va="center",
+                    transform=ax_heatmap.transAxes,
                     color=palette["text_color"]
                 )
-                ax_3d.set_xticks([])
-                ax_3d.set_yticks([])
-                ax_3d.set_zticks([])
+                ax_heatmap.set_xticks([])
+                ax_heatmap.set_yticks([])
         else:
-            ax_3d.set_title("Joint WPM / error percentage distribution")
-            ax_3d.text(
-                0.5,
+            ax_heatmap.text(
                 0.5,
                 0.5,
                 "No combined WPM/error data available",
                 ha="center",
                 va="center",
+                transform=ax_heatmap.transAxes,
                 color=palette["text_color"]
             )
-            ax_3d.set_xticks([])
-            ax_3d.set_yticks([])
-            ax_3d.set_zticks([])
+            ax_heatmap.set_xticks([])
+            ax_heatmap.set_yticks([])
+
+        ax_heatmap.set_title("Joint WPM / error percentage distribution")
+        ax_heatmap.set_xlabel("WPM")
+        ax_heatmap.set_ylabel("Error percentage (%)")
 
         if daily_dates:
             positions = np.arange(len(daily_dates))
@@ -1531,7 +1451,7 @@ class PlotMixin:
 
         ax_speed = fig.add_subplot(grid_spec[0, 0])
         ax_error = fig.add_subplot(grid_spec[0, 1])
-        ax_3d = fig.add_subplot(grid_spec[1, :], projection="3d")
+        ax_heatmap = fig.add_subplot(grid_spec[1, :])
         ax_time = fig.add_subplot(grid_spec[2, :])
         ax_time_spent = fig.add_subplot(grid_spec[3, :])
         ax_time_spent_right = ax_time_spent.twinx()
@@ -1584,79 +1504,52 @@ class PlotMixin:
                 error_arr,
                 bins=[x_edges, y_edges]
             )
-
-            x_positions = xedges[:-1]
-            y_positions = yedges[:-1]
-            x_sizes = np.diff(xedges)
-            y_sizes = np.diff(yedges)
-
-            xpos, ypos = np.meshgrid(
-                x_positions,
-                y_positions,
-                indexing="ij"
-            )
-            dx, dy = np.meshgrid(
-                x_sizes,
-                y_sizes,
-                indexing="ij"
+            cmap = mcolors.LinearSegmentedColormap.from_list(
+                "letters_error_heatmap",
+                [
+                    palette["heatmap_low_color"],
+                    palette["heatmap_high_color"]
+                ]
             )
 
-            xpos = xpos.ravel()
-            ypos = ypos.ravel()
-            dx = dx.ravel()
-            dy = dy.ravel()
-            dz = hist.ravel()
-
-            nonzero = dz > 0
-            xpos = xpos[nonzero]
-            ypos = ypos[nonzero]
-            dx = dx[nonzero]
-            dy = dy[nonzero]
-            dz = dz[nonzero]
-
-            if dz.size > 0:
-                ax_3d.bar3d(
-                    xpos,
-                    ypos,
-                    np.zeros_like(dz),
-                    dx,
-                    dy,
-                    dz,
-                    shade=True,
-                    color=palette["bar3d_color"]
+            if np.any(hist > 0):
+                im = ax_heatmap.pcolormesh(
+                    xedges,
+                    yedges,
+                    hist.T,
+                    cmap=cmap,
+                    shading="auto"
                 )
-                ax_3d.set_title("Joint letters/minute and error distribution")
-                ax_3d.set_xlabel("Letters per minute")
-                ax_3d.set_ylabel("Error percentage (%)")
-                ax_3d.set_zlabel("Count")
+                colorbar = fig.colorbar(im, ax=ax_heatmap, pad=0.02)
+                colorbar.set_label("Count")
             else:
-                ax_3d.set_title("Joint letters/minute and error distribution")
-                ax_3d.text(
-                    0.5,
+                ax_heatmap.text(
                     0.5,
                     0.5,
                     "No combined data available",
                     ha="center",
                     va="center",
+                    transform=ax_heatmap.transAxes,
                     color=palette["text_color"]
                 )
-                ax_3d.set_xticks([])
-                ax_3d.set_yticks([])
-                ax_3d.set_zticks([])
+                ax_heatmap.set_xticks([])
+                ax_heatmap.set_yticks([])
         else:
-            ax_3d.set_title("Joint letters/minute and error distribution")
-            ax_3d.text(
-                0.5,
+            ax_heatmap.text(
                 0.5,
                 0.5,
                 "No combined data available",
                 ha="center",
                 va="center",
+                transform=ax_heatmap.transAxes,
                 color=palette["text_color"]
             )
-            ax_3d.set_xticks([])
-            ax_3d.set_yticks([])
-            ax_3d.set_zticks([])
+            ax_heatmap.set_xticks([])
+            ax_heatmap.set_yticks([])
+
+        ax_heatmap.set_title("Joint letters/minute and error distribution")
+        ax_heatmap.set_xlabel("Letters per minute")
+        ax_heatmap.set_ylabel("Error percentage (%)")
 
         if daily_dates:
             positions = np.arange(len(daily_dates))
@@ -1896,7 +1789,7 @@ class PlotMixin:
 
         ax_speed = fig.add_subplot(grid_spec[0, 0])
         ax_error = fig.add_subplot(grid_spec[0, 1])
-        ax_3d = fig.add_subplot(grid_spec[1, :], projection="3d")
+        ax_heatmap = fig.add_subplot(grid_spec[1, :])
         ax_time = fig.add_subplot(grid_spec[2, :])
         ax_time_spent = fig.add_subplot(grid_spec[3, :])
         ax_time_spent_right = ax_time_spent.twinx()
@@ -1949,79 +1842,52 @@ class PlotMixin:
                 error_arr,
                 bins=[x_edges, y_edges]
             )
-
-            x_positions = xedges[:-1]
-            y_positions = yedges[:-1]
-            x_sizes = np.diff(xedges)
-            y_sizes = np.diff(yedges)
-
-            xpos, ypos = np.meshgrid(
-                x_positions,
-                y_positions,
-                indexing="ij"
-            )
-            dx, dy = np.meshgrid(
-                x_sizes,
-                y_sizes,
-                indexing="ij"
+            cmap = mcolors.LinearSegmentedColormap.from_list(
+                "special_error_heatmap",
+                [
+                    palette["heatmap_low_color"],
+                    palette["heatmap_high_color"]
+                ]
             )
 
-            xpos = xpos.ravel()
-            ypos = ypos.ravel()
-            dx = dx.ravel()
-            dy = dy.ravel()
-            dz = hist.ravel()
-
-            nonzero = dz > 0
-            xpos = xpos[nonzero]
-            ypos = ypos[nonzero]
-            dx = dx[nonzero]
-            dy = dy[nonzero]
-            dz = dz[nonzero]
-
-            if dz.size > 0:
-                ax_3d.bar3d(
-                    xpos,
-                    ypos,
-                    np.zeros_like(dz),
-                    dx,
-                    dy,
-                    dz,
-                    shade=True,
-                    color=palette["bar3d_color"]
+            if np.any(hist > 0):
+                im = ax_heatmap.pcolormesh(
+                    xedges,
+                    yedges,
+                    hist.T,
+                    cmap=cmap,
+                    shading="auto"
                 )
-                ax_3d.set_title("Joint special chars/min and error distribution")
-                ax_3d.set_xlabel("Special chars per minute")
-                ax_3d.set_ylabel("Error percentage (%)")
-                ax_3d.set_zlabel("Count")
+                colorbar = fig.colorbar(im, ax=ax_heatmap, pad=0.02)
+                colorbar.set_label("Count")
             else:
-                ax_3d.set_title("Joint special chars/min and error distribution")
-                ax_3d.text(
-                    0.5,
+                ax_heatmap.text(
                     0.5,
                     0.5,
                     "No combined data available",
                     ha="center",
                     va="center",
+                    transform=ax_heatmap.transAxes,
                     color=palette["text_color"]
                 )
-                ax_3d.set_xticks([])
-                ax_3d.set_yticks([])
-                ax_3d.set_zticks([])
+                ax_heatmap.set_xticks([])
+                ax_heatmap.set_yticks([])
         else:
-            ax_3d.set_title("Joint special chars/min and error distribution")
-            ax_3d.text(
-                0.5,
+            ax_heatmap.text(
                 0.5,
                 0.5,
                 "No combined data available",
                 ha="center",
                 va="center",
+                transform=ax_heatmap.transAxes,
                 color=palette["text_color"]
             )
-            ax_3d.set_xticks([])
-            ax_3d.set_yticks([])
-            ax_3d.set_zticks([])
+            ax_heatmap.set_xticks([])
+            ax_heatmap.set_yticks([])
+
+        ax_heatmap.set_title("Joint special chars/min and error distribution")
+        ax_heatmap.set_xlabel("Special chars per minute")
+        ax_heatmap.set_ylabel("Error percentage (%)")
 
         if daily_dates:
             positions = np.arange(len(daily_dates))
@@ -2261,7 +2127,7 @@ class PlotMixin:
 
         ax_speed = fig.add_subplot(grid_spec[0, 0])
         ax_error = fig.add_subplot(grid_spec[0, 1])
-        ax_3d = fig.add_subplot(grid_spec[1, :], projection="3d")
+        ax_heatmap = fig.add_subplot(grid_spec[1, :])
         ax_time = fig.add_subplot(grid_spec[2, :])
         ax_time_spent = fig.add_subplot(grid_spec[3, :])
         ax_time_spent_right = ax_time_spent.twinx()
@@ -2314,79 +2180,52 @@ class PlotMixin:
                 error_arr,
                 bins=[x_edges, y_edges]
             )
-
-            x_positions = xedges[:-1]
-            y_positions = yedges[:-1]
-            x_sizes = np.diff(xedges)
-            y_sizes = np.diff(yedges)
-
-            xpos, ypos = np.meshgrid(
-                x_positions,
-                y_positions,
-                indexing="ij"
-            )
-            dx, dy = np.meshgrid(
-                x_sizes,
-                y_sizes,
-                indexing="ij"
+            cmap = mcolors.LinearSegmentedColormap.from_list(
+                "digits_error_heatmap",
+                [
+                    palette["heatmap_low_color"],
+                    palette["heatmap_high_color"]
+                ]
             )
 
-            xpos = xpos.ravel()
-            ypos = ypos.ravel()
-            dx = dx.ravel()
-            dy = dy.ravel()
-            dz = hist.ravel()
-
-            nonzero = dz > 0
-            xpos = xpos[nonzero]
-            ypos = ypos[nonzero]
-            dx = dx[nonzero]
-            dy = dy[nonzero]
-            dz = dz[nonzero]
-
-            if dz.size > 0:
-                ax_3d.bar3d(
-                    xpos,
-                    ypos,
-                    np.zeros_like(dz),
-                    dx,
-                    dy,
-                    dz,
-                    shade=True,
-                    color=palette["bar3d_color"]
+            if np.any(hist > 0):
+                im = ax_heatmap.pcolormesh(
+                    xedges,
+                    yedges,
+                    hist.T,
+                    cmap=cmap,
+                    shading="auto"
                 )
-                ax_3d.set_title("Joint digits/minute and error distribution")
-                ax_3d.set_xlabel("Digits per minute")
-                ax_3d.set_ylabel("Error percentage (%)")
-                ax_3d.set_zlabel("Count")
+                colorbar = fig.colorbar(im, ax=ax_heatmap, pad=0.02)
+                colorbar.set_label("Count")
             else:
-                ax_3d.set_title("Joint digits/minute and error distribution")
-                ax_3d.text(
-                    0.5,
+                ax_heatmap.text(
                     0.5,
                     0.5,
                     "No combined data available",
                     ha="center",
                     va="center",
+                    transform=ax_heatmap.transAxes,
                     color=palette["text_color"]
                 )
-                ax_3d.set_xticks([])
-                ax_3d.set_yticks([])
-                ax_3d.set_zticks([])
+                ax_heatmap.set_xticks([])
+                ax_heatmap.set_yticks([])
         else:
-            ax_3d.set_title("Joint digits/minute and error distribution")
-            ax_3d.text(
-                0.5,
+            ax_heatmap.text(
                 0.5,
                 0.5,
                 "No combined data available",
                 ha="center",
                 va="center",
+                transform=ax_heatmap.transAxes,
                 color=palette["text_color"]
             )
-            ax_3d.set_xticks([])
-            ax_3d.set_yticks([])
-            ax_3d.set_zticks([])
+            ax_heatmap.set_xticks([])
+            ax_heatmap.set_yticks([])
+
+        ax_heatmap.set_title("Joint digits/minute and error distribution")
+        ax_heatmap.set_xlabel("Digits per minute")
+        ax_heatmap.set_ylabel("Error percentage (%)")
 
         if daily_dates:
             positions = np.arange(len(daily_dates))
