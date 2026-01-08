@@ -621,6 +621,389 @@ class PlotMixin:
             )
             ax_time_spent.set_xticks([])
             ax_time_spent.set_yticks([])
+        ax_time_spent_right.set_yticks([])
+
+        formatter = mticker.FormatStrFormatter("%.1f")
+        ax_time_spent.yaxis.set_major_formatter(formatter)
+        ax_time_spent_right.yaxis.set_major_formatter(formatter)
+
+        self._apply_plot_theme(fig, palette)
+        plt.tight_layout(pad=1.3)
+        plt.show()
+
+    def _show_blind_stats(
+        self,
+        *,
+        file_path: Path,
+        header: str,
+        mode_label: str,
+        speed_label: str,
+        speed_short_label: str
+    ) -> None:
+        """
+        Shared visualization helper for blind mode statistics across modes.
+        """
+        title = f"Blind {mode_label} statistics"
+        if not file_path.exists():
+            messagebox.showinfo(
+                title,
+                f"No blind {mode_label} statistics available yet. "
+                "Finish at least one blind mode run."
+            )
+            return
+
+        ensure_stats_file_header(
+            file_path,
+            header,
+            create_if_missing=False
+        )
+
+        speed_values: List[float] = []
+        error_rates: List[float] = []
+        speed_for_3d: List[float] = []
+        error_for_3d: List[float] = []
+        daily_stats: dict = {}
+
+        with file_path.open("r", encoding="utf-8") as file:
+            for line in file:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split(";")
+                if len(parts) < 6:
+                    continue
+                is_training_run = parse_training_flag(parts, 6)
+                if not self._should_include_training_entry(is_training_run):
+                    continue
+                try:
+                    day = datetime.strptime(
+                        parts[0],
+                        "%Y-%m-%d %H:%M:%S"
+                    ).date()
+                except ValueError:
+                    day = None
+                try:
+                    speed_val = float(parts[1])
+                except ValueError:
+                    continue
+                speed_values.append(speed_val)
+
+                err_val: float | None = None
+                if len(parts) >= 6:
+                    try:
+                        err_val = float(parts[5])
+                    except ValueError:
+                        err_val = None
+                    if err_val is not None:
+                        error_rates.append(err_val)
+                        speed_for_3d.append(speed_val)
+                        error_for_3d.append(err_val)
+
+                duration_val: float | None = None
+                if len(parts) >= 4:
+                    try:
+                        duration_val = float(parts[3])
+                    except ValueError:
+                        duration_val = None
+
+                if day is not None:
+                    entry = daily_stats.setdefault(
+                        day,
+                        {
+                            "speed_sum": 0.0,
+                            "speed_count": 0,
+                            "error_sum": 0.0,
+                            "error_count": 0,
+                            "duration_sum": 0.0,
+                        }
+                    )
+                    entry["speed_sum"] += speed_val
+                    entry["speed_count"] += 1
+                    if err_val is not None:
+                        entry["error_sum"] += err_val
+                        entry["error_count"] += 1
+                    if duration_val is not None:
+                        entry["duration_sum"] += max(duration_val, 0.0)
+
+        if not speed_values:
+            messagebox.showinfo(
+                title,
+                "No statistics available for the current filter selection."
+            )
+            return
+
+        daily_dates: List[date] = []
+        daily_speed: List[float] = []
+        daily_error: List[float] = []
+        daily_duration_minutes: List[float] = []
+        if daily_stats:
+            start_date = min(daily_stats)
+            end_date = max(datetime.now().date(), start_date)
+            current_day = start_date
+            while current_day <= end_date:
+                daily_dates.append(current_day)
+                stats = daily_stats.get(current_day)
+                if stats:
+                    daily_speed.append(stats["speed_sum"] / stats["speed_count"])
+                    if stats["error_count"] > 0:
+                        daily_error.append(
+                            stats["error_sum"] / stats["error_count"]
+                        )
+                    else:
+                        daily_error.append(0.0)
+                    daily_duration_minutes.append(
+                        stats.get("duration_sum", 0.0) / 60.0
+                    )
+                else:
+                    daily_speed.append(0.0)
+                    daily_error.append(0.0)
+                    daily_duration_minutes.append(0.0)
+                current_day += timedelta(days=1)
+
+        palette = self._get_plot_palette()
+        fig = plt.figure(figsize=(12, 10))
+        self._configure_figure_window(fig)
+        grid_spec = fig.add_gridspec(4, 2, height_ratios=[1.0, 1.2, 1.0, 0.8])
+        grid_spec.update(hspace=0.75, wspace=0.4)
+
+        ax_speed = fig.add_subplot(grid_spec[0, 0])
+        ax_error = fig.add_subplot(grid_spec[0, 1])
+        ax_3d = fig.add_subplot(grid_spec[1, :], projection="3d")
+        ax_time = fig.add_subplot(grid_spec[2, :])
+        ax_time_spent = fig.add_subplot(grid_spec[3, :])
+        ax_time_spent_right = ax_time_spent.twinx()
+
+        ax_speed.hist(
+            speed_values,
+            bins="auto",
+            color=palette["hist_speed_color"],
+            edgecolor=palette["axes_facecolor"],
+            alpha=0.85
+        )
+        ax_speed.set_title(f"{speed_label} distribution")
+        ax_speed.set_xlabel(speed_label)
+        ax_speed.set_ylabel("Frequency")
+
+        if error_rates:
+            ax_error.hist(
+                error_rates,
+                bins="auto",
+                color=palette["hist_error_color"],
+                edgecolor=palette["axes_facecolor"],
+                alpha=0.85
+            )
+            ax_error.set_title("End error percentage distribution")
+            ax_error.set_xlabel("End error percentage (%)")
+            ax_error.set_ylabel("Frequency")
+        else:
+            ax_error.set_title("End error percentage distribution")
+            ax_error.text(
+                0.5,
+                0.5,
+                "No end error data available",
+                ha="center",
+                va="center",
+                transform=ax_error.transAxes,
+                color=palette["text_color"]
+            )
+            ax_error.set_xticks([])
+            ax_error.set_yticks([])
+
+        if speed_for_3d and error_for_3d:
+            speed_arr = np.asarray(speed_for_3d, dtype=float)
+            error_arr = np.asarray(error_for_3d, dtype=float)
+
+            x_edges = np.histogram_bin_edges(speed_arr, bins="auto")
+            y_edges = np.histogram_bin_edges(error_arr, bins="auto")
+
+            hist, xedges, yedges = np.histogram2d(
+                speed_arr,
+                error_arr,
+                bins=[x_edges, y_edges]
+            )
+
+            x_positions = xedges[:-1]
+            y_positions = yedges[:-1]
+            x_sizes = np.diff(xedges)
+            y_sizes = np.diff(yedges)
+
+            xpos, ypos = np.meshgrid(
+                x_positions,
+                y_positions,
+                indexing="ij"
+            )
+            dx, dy = np.meshgrid(
+                x_sizes,
+                y_sizes,
+                indexing="ij"
+            )
+
+            xpos = xpos.ravel()
+            ypos = ypos.ravel()
+            dx = dx.ravel()
+            dy = dy.ravel()
+            dz = hist.ravel()
+
+            nonzero = dz > 0
+            xpos = xpos[nonzero]
+            ypos = ypos[nonzero]
+            dx = dx[nonzero]
+            dy = dy[nonzero]
+            dz = dz[nonzero]
+
+            if dz.size > 0:
+                ax_3d.bar3d(
+                    xpos,
+                    ypos,
+                    np.zeros_like(dz),
+                    dx,
+                    dy,
+                    dz,
+                    shade=True,
+                    color=palette["bar3d_color"]
+                )
+                ax_3d.set_title(
+                    f"Joint {speed_short_label} / end error distribution"
+                )
+                ax_3d.set_xlabel(speed_short_label)
+                ax_3d.set_ylabel("End error percentage (%)")
+                ax_3d.set_zlabel("Count")
+            else:
+                ax_3d.set_title(
+                    f"Joint {speed_short_label} / end error distribution"
+                )
+                ax_3d.text(
+                    0.5,
+                    0.5,
+                    0.5,
+                    "No combined data available",
+                    ha="center",
+                    va="center",
+                    color=palette["text_color"]
+                )
+                ax_3d.set_xticks([])
+                ax_3d.set_yticks([])
+                ax_3d.set_zticks([])
+        else:
+            ax_3d.set_title(
+                f"Joint {speed_short_label} / end error distribution"
+            )
+            ax_3d.text(
+                0.5,
+                0.5,
+                0.5,
+                "No combined data available",
+                ha="center",
+                va="center",
+                color=palette["text_color"]
+            )
+            ax_3d.set_xticks([])
+            ax_3d.set_yticks([])
+            ax_3d.set_zticks([])
+
+        if daily_dates:
+            positions = np.arange(len(daily_dates))
+            bar_width = 0.25
+            ax_time.bar(
+                positions - bar_width,
+                daily_speed,
+                width=bar_width,
+                color=palette["daily_speed_color"],
+                label=f"Average {speed_short_label}"
+            )
+            ax_time.bar(
+                positions,
+                daily_error,
+                width=bar_width,
+                color=palette["daily_error_color"],
+                label="Average end error %"
+            )
+            ax_time.bar(
+                positions + bar_width,
+                daily_duration_minutes,
+                width=bar_width,
+                color=palette["daily_duration_color"],
+                label="Total time (min)"
+            )
+            formatted_days = [day.strftime("%Y-%m-%d") for day in daily_dates]
+            ax_time.set_xticks(positions)
+            ax_time.set_xticklabels(
+                formatted_days,
+                rotation=45,
+                ha="right"
+            )
+            ax_time.set_ylabel("Daily averages / total time")
+            ax_time.set_title(
+                f"Daily averages ({speed_short_label} vs end error %)"
+            )
+            legend = ax_time.legend()
+            self._style_legend(legend, palette)
+
+            cumulative_duration_minutes: List[float] = []
+            cumulative_total = 0.0
+            for minutes in daily_duration_minutes:
+                cumulative_total += minutes
+                cumulative_duration_minutes.append(cumulative_total)
+
+            ax_time_spent.bar(
+                positions,
+                daily_duration_minutes,
+                width=0.6,
+                color=palette["time_per_day_bar_color"],
+                label="Time per day (min)"
+            )
+            ax_time_spent_right.plot(
+                positions,
+                cumulative_duration_minutes,
+                color=palette["time_cumulative_line_color"],
+                marker="o",
+                markerfacecolor=palette["axes_facecolor"],
+                markeredgecolor=palette["time_cumulative_line_color"],
+                linewidth=1.8,
+                label="Cumulative time (min)"
+            )
+            ax_time_spent.set_xticks(positions)
+            ax_time_spent.set_xticklabels(
+                formatted_days,
+                rotation=45,
+                ha="right"
+            )
+            ax_time_spent.set_ylabel("Time per day (min)")
+            ax_time_spent_right.set_ylabel("Cumulative time (min)")
+            ax_time_spent.set_title("Time spent per day")
+            handles, labels = ax_time_spent.get_legend_handles_labels()
+            handles2, labels2 = ax_time_spent_right.get_legend_handles_labels()
+            legend = ax_time_spent.legend(
+                handles + handles2,
+                labels + labels2,
+                loc="upper left",
+                frameon=False
+            )
+            self._style_legend(legend, palette)
+        else:
+            ax_time.text(
+                0.5,
+                0.5,
+                "No dated entries available",
+                ha="center",
+                va="center",
+                transform=ax_time.transAxes,
+                color=palette["text_color"]
+            )
+            ax_time.set_xticks([])
+            ax_time.set_yticks([])
+            ax_time_spent.set_title("Time spent per day")
+            ax_time_spent.text(
+                0.5,
+                0.5,
+                "No dated entries available",
+                ha="center",
+                va="center",
+                transform=ax_time_spent.transAxes,
+                color=palette["text_color"]
+            )
+            ax_time_spent.set_xticks([])
+            ax_time_spent.set_yticks([])
             ax_time_spent_right.set_yticks([])
 
         formatter = mticker.FormatStrFormatter("%.1f")
@@ -639,6 +1022,16 @@ class PlotMixin:
         If no statistics file exists or no valid values can be read, an
         information dialog is shown instead.
         """
+        if self.is_blind_mode_active():
+            self._show_blind_stats(
+                file_path=self.blind_typing_stats_file_path,
+                header=BLIND_TYPING_STATS_FILE_HEADER,
+                mode_label="typing",
+                speed_label="Words per minute",
+                speed_short_label="WPM"
+            )
+            return
+
         if self.is_sudden_death_active():
             self._show_sudden_death_stats(
                 file_path=self.sudden_death_typing_stats_file_path,
@@ -1014,6 +1407,16 @@ class PlotMixin:
         """
         Visualize stored letter mode statistics (letters per minute and errors).
         """
+        if self.is_blind_mode_active():
+            self._show_blind_stats(
+                file_path=self.blind_letter_stats_file_path,
+                header=BLIND_LETTER_STATS_FILE_HEADER,
+                mode_label="letter",
+                speed_label="Letters per minute",
+                speed_short_label="Letters/min"
+            )
+            return
+
         if self.is_sudden_death_active():
             self._show_sudden_death_stats(
                 file_path=self.sudden_death_letter_stats_file_path,
@@ -1369,6 +1772,16 @@ class PlotMixin:
         """
         Visualize stored special character mode statistics.
         """
+        if self.is_blind_mode_active():
+            self._show_blind_stats(
+                file_path=self.blind_special_stats_file_path,
+                header=BLIND_SPECIAL_STATS_FILE_HEADER,
+                mode_label="character",
+                speed_label="Special chars per minute",
+                speed_short_label="Special chars/min"
+            )
+            return
+
         if self.is_sudden_death_active():
             self._show_sudden_death_stats(
                 file_path=self.sudden_death_special_stats_file_path,
@@ -1724,6 +2137,16 @@ class PlotMixin:
         """
         Visualize stored number mode statistics.
         """
+        if self.is_blind_mode_active():
+            self._show_blind_stats(
+                file_path=self.blind_number_stats_file_path,
+                header=BLIND_NUMBER_STATS_FILE_HEADER,
+                mode_label="number",
+                speed_label="Digits per minute",
+                speed_short_label="Digits/min"
+            )
+            return
+
         if self.is_sudden_death_active():
             self._show_sudden_death_stats(
                 file_path=self.sudden_death_number_stats_file_path,
@@ -2141,6 +2564,38 @@ class PlotMixin:
                 "number",
                 _training_flag_index_from_header(
                     SUDDEN_DEATH_NUMBER_STATS_FILE_HEADER
+                )
+            ),
+            (
+                self.blind_typing_stats_file_path,
+                BLIND_TYPING_STATS_FILE_HEADER,
+                "typing",
+                _training_flag_index_from_header(
+                    BLIND_TYPING_STATS_FILE_HEADER
+                )
+            ),
+            (
+                self.blind_letter_stats_file_path,
+                BLIND_LETTER_STATS_FILE_HEADER,
+                "letter",
+                _training_flag_index_from_header(
+                    BLIND_LETTER_STATS_FILE_HEADER
+                )
+            ),
+            (
+                self.blind_special_stats_file_path,
+                BLIND_SPECIAL_STATS_FILE_HEADER,
+                "character",
+                _training_flag_index_from_header(
+                    BLIND_SPECIAL_STATS_FILE_HEADER
+                )
+            ),
+            (
+                self.blind_number_stats_file_path,
+                BLIND_NUMBER_STATS_FILE_HEADER,
+                "number",
+                _training_flag_index_from_header(
+                    BLIND_NUMBER_STATS_FILE_HEADER
                 )
             )
         ]
