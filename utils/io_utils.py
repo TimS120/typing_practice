@@ -4,9 +4,12 @@ Utility helpers for accessing and maintaining typing trainer data files.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import List
 
+
+APP_DIR_NAME = "typing_practice"
 DATA_DIR_NAME = "data"
 
 TEXT_FILE_NAME = "typing_texts.txt"
@@ -73,21 +76,20 @@ BLIND_NUMBER_STATS_FILE_HEADER = (
 )
 
 
-def _get_project_root() -> Path:
-    """
-    Return the project root folder that contains the utils package.
-    """
-    try:
-        return Path(__file__).resolve().parents[1]
-    except NameError:
-        return Path.cwd()
-
-
 def get_data_dir() -> Path:
     """
-    Return the folder that contains the data files, creating it if necessary.
+    Return the folder that contains the user writable data files.
+
+    For packaged apps, writing next to the executable is unreliable. Therefore,
+    data is stored in a per-user writable location.
     """
-    data_dir = _get_project_root() / DATA_DIR_NAME
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        base_dir = Path(local_app_data) / APP_DIR_NAME
+    else:
+        base_dir = Path.home() / ".local" / "share" / APP_DIR_NAME
+
+    data_dir = base_dir / DATA_DIR_NAME
     data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir
 
@@ -112,7 +114,7 @@ def default_texts() -> List[str]:
         "Typing practice helps to increase speed and accuracy.",
         "Python is a powerful and readable programming language.",
         "Consistent practice is the key to becoming a faster typist.",
-        "Robots can move precisely if their controllers are well designed."
+        "Robots can move precisely if their controllers are well designed.",
     ]
 
 
@@ -169,7 +171,7 @@ def load_or_create_texts(path: Path) -> List[str]:
 def ensure_stats_file_header(
     path: Path,
     header: str,
-    create_if_missing: bool = True
+    create_if_missing: bool = True,
 ) -> None:
     """
     Make sure the statistics file exists and starts with the given header line.
