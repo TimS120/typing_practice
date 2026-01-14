@@ -277,6 +277,105 @@ class PlotMixin:
         except Exception:
             pass
 
+    def _draw_joint_heatmap(
+        self,
+        *,
+        fig: plt.Figure,
+        ax: plt.Axes,
+        x_values: list[float],
+        y_values: list[float],
+        x_label: str,
+        y_label: str,
+        title: str,
+        palette: dict[str, Any]
+    ) -> None:
+        """
+        Draw a square joint heatmap with a shared bin count on both axes.
+        """
+        ax.set_title(title)
+        if not x_values or not y_values:
+            ax.text(
+                0.5,
+                0.5,
+                "No combined data available",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+                color=palette["text_color"]
+            )
+            ax.set_xticks([])
+            ax.set_yticks([])
+            return
+
+        x_arr = np.asarray(x_values, dtype=float)
+        y_arr = np.asarray(y_values, dtype=float)
+        valid = np.isfinite(x_arr) & np.isfinite(y_arr)
+        x_arr = x_arr[valid]
+        y_arr = y_arr[valid]
+        if x_arr.size == 0 or y_arr.size == 0:
+            ax.text(
+                0.5,
+                0.5,
+                "No combined data available",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+                color=palette["text_color"]
+            )
+            ax.set_xticks([])
+            ax.set_yticks([])
+            return
+
+        x_edges = np.histogram_bin_edges(x_arr, bins="auto")
+        y_edges = np.histogram_bin_edges(y_arr, bins="auto")
+        bin_count = int(max(len(x_edges), len(y_edges)) - 1)
+        if bin_count < 1:
+            bin_count = 1
+
+        x_min = float(np.nanmin(x_arr))
+        x_max = float(np.nanmax(x_arr))
+        y_min = float(np.nanmin(y_arr))
+        y_max = float(np.nanmax(y_arr))
+        if x_min == x_max:
+            x_min -= 1.0
+            x_max += 1.0
+        if y_min == y_max:
+            y_min -= 1.0
+            y_max += 1.0
+
+        xedges = np.linspace(x_min, x_max, bin_count + 1)
+        yedges = np.linspace(y_min, y_max, bin_count + 1)
+        hist, xedges, yedges = np.histogram2d(
+            x_arr,
+            y_arr,
+            bins=[xedges, yedges]
+        )
+        cmap = mcolors.LinearSegmentedColormap.from_list(
+            "joint_heatmap",
+            [
+                palette["heatmap_low_color"],
+                palette["heatmap_high_color"]
+            ]
+        )
+        im = ax.pcolormesh(
+            xedges,
+            yedges,
+            hist.T,
+            cmap=cmap,
+            shading="auto"
+        )
+        ax.set_xlim(x_min, x_max)
+        ax.set_ylim(y_min, y_max)
+        ax.margins(0)
+        try:
+            ax.set_box_aspect(1)
+        except AttributeError:
+            pass
+        colorbar = fig.colorbar(im, ax=ax, pad=0.02)
+        colorbar.set_label("Count")
+        ax.set_xlabel(x_label)
+        ax.set_ylabel(y_label)
+
     def _show_sudden_death_stats(
         self,
         *,
@@ -396,7 +495,7 @@ class PlotMixin:
 
         ax_speed = fig.add_subplot(grid_spec[0, 0])
         ax_correct = fig.add_subplot(grid_spec[0, 1])
-        ax_3d = fig.add_subplot(grid_spec[1, :], projection="3d")
+        ax_joint = fig.add_subplot(grid_spec[1, :])
         ax_time = fig.add_subplot(grid_spec[2, :])
         ax_time_spent = fig.add_subplot(grid_spec[3, :])
         ax_time_spent_right = ax_time_spent.twinx()
@@ -437,85 +536,19 @@ class PlotMixin:
             ax_correct.set_xticks([])
             ax_correct.set_yticks([])
 
-        if speed_values and correct_counts:
-            speed_arr = np.asarray(speed_values, dtype=float)
-            correct_arr = np.asarray(correct_counts, dtype=float)
-            x_edges = np.histogram_bin_edges(speed_arr, bins="auto")
-            y_edges = np.histogram_bin_edges(correct_arr, bins="auto")
-            hist, xedges, yedges = np.histogram2d(
-                speed_arr,
-                correct_arr,
-                bins=[x_edges, y_edges]
-            )
-            x_positions = xedges[:-1]
-            y_positions = yedges[:-1]
-            x_sizes = np.diff(xedges)
-            y_sizes = np.diff(yedges)
-            xpos, ypos = np.meshgrid(
-                x_positions,
-                y_positions,
-                indexing="ij"
-            )
-            dx, dy = np.meshgrid(
-                x_sizes,
-                y_sizes,
-                indexing="ij"
-            )
-            xpos = xpos.ravel()
-            ypos = ypos.ravel()
-            dx = dx.ravel()
-            dy = dy.ravel()
-            dz = hist.ravel()
-            nonzero = dz > 0
-            xpos = xpos[nonzero]
-            ypos = ypos[nonzero]
-            dx = dx[nonzero]
-            dy = dy[nonzero]
-            dz = dz[nonzero]
-            if dz.size > 0:
-                ax_3d.bar3d(
-                    xpos,
-                    ypos,
-                    np.zeros_like(dz),
-                    dx,
-                    dy,
-                    dz,
-                    shade=True,
-                    color=palette["bar3d_color"]
-                )
-            else:
-                ax_3d.text(
-                    0.5,
-                    0.5,
-                    0.5,
-                    "No combined data available",
-                    ha="center",
-                    va="center",
-                    color=palette["text_color"]
-                )
-                ax_3d.set_xticks([])
-                ax_3d.set_yticks([])
-                ax_3d.set_zticks([])
-        else:
-            ax_3d.text(
-                0.5,
-                0.5,
-                0.5,
-                "No combined data available",
-                ha="center",
-                va="center",
-                color=palette["text_color"]
-            )
-            ax_3d.set_xticks([])
-            ax_3d.set_yticks([])
-            ax_3d.set_zticks([])
-
-        ax_3d.set_title(
-            f"Joint {speed_short_label} / {correct_label.lower()} distribution"
+        self._draw_joint_heatmap(
+            fig=fig,
+            ax=ax_joint,
+            x_values=speed_values,
+            y_values=correct_counts,
+            x_label=speed_short_label,
+            y_label=correct_label,
+            title=(
+                f"Joint {speed_short_label} / "
+                f"{correct_label.lower()} distribution"
+            ),
+            palette=palette
         )
-        ax_3d.set_xlabel(speed_short_label)
-        ax_3d.set_ylabel(correct_label)
-        ax_3d.set_zlabel("Count")
 
         if daily_dates:
             positions = np.arange(len(daily_dates))
@@ -768,7 +801,7 @@ class PlotMixin:
 
         ax_speed = fig.add_subplot(grid_spec[0, 0])
         ax_error = fig.add_subplot(grid_spec[0, 1])
-        ax_3d = fig.add_subplot(grid_spec[1, :], projection="3d")
+        ax_joint = fig.add_subplot(grid_spec[1, :])
         ax_time = fig.add_subplot(grid_spec[2, :])
         ax_time_spent = fig.add_subplot(grid_spec[3, :])
         ax_time_spent_right = ax_time_spent.twinx()
@@ -809,97 +842,16 @@ class PlotMixin:
             ax_error.set_xticks([])
             ax_error.set_yticks([])
 
-        if speed_for_3d and error_for_3d:
-            speed_arr = np.asarray(speed_for_3d, dtype=float)
-            error_arr = np.asarray(error_for_3d, dtype=float)
-
-            x_edges = np.histogram_bin_edges(speed_arr, bins="auto")
-            y_edges = np.histogram_bin_edges(error_arr, bins="auto")
-
-            hist, xedges, yedges = np.histogram2d(
-                speed_arr,
-                error_arr,
-                bins=[x_edges, y_edges]
-            )
-
-            x_positions = xedges[:-1]
-            y_positions = yedges[:-1]
-            x_sizes = np.diff(xedges)
-            y_sizes = np.diff(yedges)
-
-            xpos, ypos = np.meshgrid(
-                x_positions,
-                y_positions,
-                indexing="ij"
-            )
-            dx, dy = np.meshgrid(
-                x_sizes,
-                y_sizes,
-                indexing="ij"
-            )
-
-            xpos = xpos.ravel()
-            ypos = ypos.ravel()
-            dx = dx.ravel()
-            dy = dy.ravel()
-            dz = hist.ravel()
-
-            nonzero = dz > 0
-            xpos = xpos[nonzero]
-            ypos = ypos[nonzero]
-            dx = dx[nonzero]
-            dy = dy[nonzero]
-            dz = dz[nonzero]
-
-            if dz.size > 0:
-                ax_3d.bar3d(
-                    xpos,
-                    ypos,
-                    np.zeros_like(dz),
-                    dx,
-                    dy,
-                    dz,
-                    shade=True,
-                    color=palette["bar3d_color"]
-                )
-                ax_3d.set_title(
-                    f"Joint {speed_short_label} / end error distribution"
-                )
-                ax_3d.set_xlabel(speed_short_label)
-                ax_3d.set_ylabel("End error percentage (%)")
-                ax_3d.set_zlabel("Count")
-            else:
-                ax_3d.set_title(
-                    f"Joint {speed_short_label} / end error distribution"
-                )
-                ax_3d.text(
-                    0.5,
-                    0.5,
-                    0.5,
-                    "No combined data available",
-                    ha="center",
-                    va="center",
-                    color=palette["text_color"]
-                )
-                ax_3d.set_xticks([])
-                ax_3d.set_yticks([])
-                ax_3d.set_zticks([])
-        else:
-            ax_3d.set_title(
-                f"Joint {speed_short_label} / end error distribution"
-            )
-            ax_3d.text(
-                0.5,
-                0.5,
-                0.5,
-                "No combined data available",
-                ha="center",
-                va="center",
-                color=palette["text_color"]
-            )
-            ax_3d.set_xticks([])
-            ax_3d.set_yticks([])
-            ax_3d.set_zticks([])
+        self._draw_joint_heatmap(
+            fig=fig,
+            ax=ax_joint,
+            x_values=speed_for_3d,
+            y_values=error_for_3d,
+            x_label=speed_short_label,
+            y_label="End error percentage (%)",
+            title=f"Joint {speed_short_label} / end error distribution",
+            palette=palette
+        )
 
         if daily_dates:
             positions = np.arange(len(daily_dates))
@@ -1016,7 +968,7 @@ class PlotMixin:
 
     def show_stats(self) -> None:
         """
-        Show histograms of WPM, error percentage, and a 3D joint histogram
+        Show histograms of WPM, error percentage, and a 2D joint heatmap
         in a single Matplotlib figure.
 
         If no statistics file exists or no valid values can be read, an
@@ -1166,7 +1118,7 @@ class PlotMixin:
 
         ax_wpm = fig.add_subplot(grid_spec[0, 0])
         ax_error = fig.add_subplot(grid_spec[0, 1])
-        ax_3d = fig.add_subplot(grid_spec[1, :], projection="3d")
+        ax_joint = fig.add_subplot(grid_spec[1, :])
         ax_time = fig.add_subplot(grid_spec[2, :])
         ax_time_spent = fig.add_subplot(grid_spec[3, :])
         ax_time_spent_right = ax_time_spent.twinx()
@@ -1207,91 +1159,16 @@ class PlotMixin:
             ax_error.set_xticks([])
             ax_error.set_yticks([])
 
-        if wpm_for_3d and error_for_3d:
-            wpm_arr = np.asarray(wpm_for_3d, dtype=float)
-            error_arr = np.asarray(error_for_3d, dtype=float)
-
-            x_edges = np.histogram_bin_edges(wpm_arr, bins="auto")
-            y_edges = np.histogram_bin_edges(error_arr, bins="auto")
-
-            hist, xedges, yedges = np.histogram2d(
-                wpm_arr,
-                error_arr,
-                bins=[x_edges, y_edges]
-            )
-
-            x_positions = xedges[:-1]
-            y_positions = yedges[:-1]
-            x_sizes = np.diff(xedges)
-            y_sizes = np.diff(yedges)
-
-            xpos, ypos = np.meshgrid(
-                x_positions,
-                y_positions,
-                indexing="ij"
-            )
-            dx, dy = np.meshgrid(
-                x_sizes,
-                y_sizes,
-                indexing="ij"
-            )
-
-            xpos = xpos.ravel()
-            ypos = ypos.ravel()
-            dx = dx.ravel()
-            dy = dy.ravel()
-            dz = hist.ravel()
-
-            nonzero = dz > 0
-            xpos = xpos[nonzero]
-            ypos = ypos[nonzero]
-            dx = dx[nonzero]
-            dy = dy[nonzero]
-            dz = dz[nonzero]
-
-            if dz.size > 0:
-                ax_3d.bar3d(
-                    xpos,
-                    ypos,
-                    np.zeros_like(dz),
-                    dx,
-                    dy,
-                    dz,
-                    shade=True,
-                    color=palette["bar3d_color"]
-                )
-                ax_3d.set_title("Joint WPM / error percentage distribution")
-                ax_3d.set_xlabel("WPM")
-                ax_3d.set_ylabel("Error percentage (%)")
-                ax_3d.set_zlabel("Count")
-            else:
-                ax_3d.set_title("Joint WPM / error percentage distribution")
-                ax_3d.text(
-                    0.5,
-                    0.5,
-                    0.5,
-                    "No combined WPM/error data available",
-                    ha="center",
-                    va="center",
-                    color=palette["text_color"]
-                )
-                ax_3d.set_xticks([])
-                ax_3d.set_yticks([])
-                ax_3d.set_zticks([])
-        else:
-            ax_3d.set_title("Joint WPM / error percentage distribution")
-            ax_3d.text(
-                0.5,
-                0.5,
-                0.5,
-                "No combined WPM/error data available",
-                ha="center",
-                va="center",
-                color=palette["text_color"]
-            )
-            ax_3d.set_xticks([])
-            ax_3d.set_yticks([])
-            ax_3d.set_zticks([])
+        self._draw_joint_heatmap(
+            fig=fig,
+            ax=ax_joint,
+            x_values=wpm_for_3d,
+            y_values=error_for_3d,
+            x_label="WPM",
+            y_label="Error percentage (%)",
+            title="Joint WPM / error percentage distribution",
+            palette=palette
+        )
 
         if daily_dates:
             positions = np.arange(len(daily_dates))
@@ -1531,7 +1408,7 @@ class PlotMixin:
 
         ax_speed = fig.add_subplot(grid_spec[0, 0])
         ax_error = fig.add_subplot(grid_spec[0, 1])
-        ax_3d = fig.add_subplot(grid_spec[1, :], projection="3d")
+        ax_joint = fig.add_subplot(grid_spec[1, :])
         ax_time = fig.add_subplot(grid_spec[2, :])
         ax_time_spent = fig.add_subplot(grid_spec[3, :])
         ax_time_spent_right = ax_time_spent.twinx()
@@ -1572,91 +1449,16 @@ class PlotMixin:
             ax_error.set_xticks([])
             ax_error.set_yticks([])
 
-        if letters_per_minute and error_rates:
-            lpm_arr = np.asarray(letters_per_minute, dtype=float)
-            error_arr = np.asarray(error_rates, dtype=float)
-
-            x_edges = np.histogram_bin_edges(lpm_arr, bins="auto")
-            y_edges = np.histogram_bin_edges(error_arr, bins="auto")
-
-            hist, xedges, yedges = np.histogram2d(
-                lpm_arr,
-                error_arr,
-                bins=[x_edges, y_edges]
-            )
-
-            x_positions = xedges[:-1]
-            y_positions = yedges[:-1]
-            x_sizes = np.diff(xedges)
-            y_sizes = np.diff(yedges)
-
-            xpos, ypos = np.meshgrid(
-                x_positions,
-                y_positions,
-                indexing="ij"
-            )
-            dx, dy = np.meshgrid(
-                x_sizes,
-                y_sizes,
-                indexing="ij"
-            )
-
-            xpos = xpos.ravel()
-            ypos = ypos.ravel()
-            dx = dx.ravel()
-            dy = dy.ravel()
-            dz = hist.ravel()
-
-            nonzero = dz > 0
-            xpos = xpos[nonzero]
-            ypos = ypos[nonzero]
-            dx = dx[nonzero]
-            dy = dy[nonzero]
-            dz = dz[nonzero]
-
-            if dz.size > 0:
-                ax_3d.bar3d(
-                    xpos,
-                    ypos,
-                    np.zeros_like(dz),
-                    dx,
-                    dy,
-                    dz,
-                    shade=True,
-                    color=palette["bar3d_color"]
-                )
-                ax_3d.set_title("Joint letters/minute and error distribution")
-                ax_3d.set_xlabel("Letters per minute")
-                ax_3d.set_ylabel("Error percentage (%)")
-                ax_3d.set_zlabel("Count")
-            else:
-                ax_3d.set_title("Joint letters/minute and error distribution")
-                ax_3d.text(
-                    0.5,
-                    0.5,
-                    0.5,
-                    "No combined data available",
-                    ha="center",
-                    va="center",
-                    color=palette["text_color"]
-                )
-                ax_3d.set_xticks([])
-                ax_3d.set_yticks([])
-                ax_3d.set_zticks([])
-        else:
-            ax_3d.set_title("Joint letters/minute and error distribution")
-            ax_3d.text(
-                0.5,
-                0.5,
-                0.5,
-                "No combined data available",
-                ha="center",
-                va="center",
-                color=palette["text_color"]
-            )
-            ax_3d.set_xticks([])
-            ax_3d.set_yticks([])
-            ax_3d.set_zticks([])
+        self._draw_joint_heatmap(
+            fig=fig,
+            ax=ax_joint,
+            x_values=letters_per_minute,
+            y_values=error_rates,
+            x_label="Letters per minute",
+            y_label="Error percentage (%)",
+            title="Joint letters/minute and error distribution",
+            palette=palette
+        )
 
         if daily_dates:
             positions = np.arange(len(daily_dates))
@@ -1896,7 +1698,7 @@ class PlotMixin:
 
         ax_speed = fig.add_subplot(grid_spec[0, 0])
         ax_error = fig.add_subplot(grid_spec[0, 1])
-        ax_3d = fig.add_subplot(grid_spec[1, :], projection="3d")
+        ax_joint = fig.add_subplot(grid_spec[1, :])
         ax_time = fig.add_subplot(grid_spec[2, :])
         ax_time_spent = fig.add_subplot(grid_spec[3, :])
         ax_time_spent_right = ax_time_spent.twinx()
@@ -1937,91 +1739,16 @@ class PlotMixin:
             ax_error.set_xticks([])
             ax_error.set_yticks([])
 
-        if symbols_per_minute and error_rates:
-            spm_arr = np.asarray(symbols_per_minute, dtype=float)
-            error_arr = np.asarray(error_rates, dtype=float)
-
-            x_edges = np.histogram_bin_edges(spm_arr, bins="auto")
-            y_edges = np.histogram_bin_edges(error_arr, bins="auto")
-
-            hist, xedges, yedges = np.histogram2d(
-                spm_arr,
-                error_arr,
-                bins=[x_edges, y_edges]
-            )
-
-            x_positions = xedges[:-1]
-            y_positions = yedges[:-1]
-            x_sizes = np.diff(xedges)
-            y_sizes = np.diff(yedges)
-
-            xpos, ypos = np.meshgrid(
-                x_positions,
-                y_positions,
-                indexing="ij"
-            )
-            dx, dy = np.meshgrid(
-                x_sizes,
-                y_sizes,
-                indexing="ij"
-            )
-
-            xpos = xpos.ravel()
-            ypos = ypos.ravel()
-            dx = dx.ravel()
-            dy = dy.ravel()
-            dz = hist.ravel()
-
-            nonzero = dz > 0
-            xpos = xpos[nonzero]
-            ypos = ypos[nonzero]
-            dx = dx[nonzero]
-            dy = dy[nonzero]
-            dz = dz[nonzero]
-
-            if dz.size > 0:
-                ax_3d.bar3d(
-                    xpos,
-                    ypos,
-                    np.zeros_like(dz),
-                    dx,
-                    dy,
-                    dz,
-                    shade=True,
-                    color=palette["bar3d_color"]
-                )
-                ax_3d.set_title("Joint special chars/min and error distribution")
-                ax_3d.set_xlabel("Special chars per minute")
-                ax_3d.set_ylabel("Error percentage (%)")
-                ax_3d.set_zlabel("Count")
-            else:
-                ax_3d.set_title("Joint special chars/min and error distribution")
-                ax_3d.text(
-                    0.5,
-                    0.5,
-                    0.5,
-                    "No combined data available",
-                    ha="center",
-                    va="center",
-                    color=palette["text_color"]
-                )
-                ax_3d.set_xticks([])
-                ax_3d.set_yticks([])
-                ax_3d.set_zticks([])
-        else:
-            ax_3d.set_title("Joint special chars/min and error distribution")
-            ax_3d.text(
-                0.5,
-                0.5,
-                0.5,
-                "No combined data available",
-                ha="center",
-                va="center",
-                color=palette["text_color"]
-            )
-            ax_3d.set_xticks([])
-            ax_3d.set_yticks([])
-            ax_3d.set_zticks([])
+        self._draw_joint_heatmap(
+            fig=fig,
+            ax=ax_joint,
+            x_values=symbols_per_minute,
+            y_values=error_rates,
+            x_label="Special chars per minute",
+            y_label="Error percentage (%)",
+            title="Joint special chars/min and error distribution",
+            palette=palette
+        )
 
         if daily_dates:
             positions = np.arange(len(daily_dates))
@@ -2261,7 +1988,7 @@ class PlotMixin:
 
         ax_speed = fig.add_subplot(grid_spec[0, 0])
         ax_error = fig.add_subplot(grid_spec[0, 1])
-        ax_3d = fig.add_subplot(grid_spec[1, :], projection="3d")
+        ax_joint = fig.add_subplot(grid_spec[1, :])
         ax_time = fig.add_subplot(grid_spec[2, :])
         ax_time_spent = fig.add_subplot(grid_spec[3, :])
         ax_time_spent_right = ax_time_spent.twinx()
@@ -2302,91 +2029,16 @@ class PlotMixin:
             ax_error.set_xticks([])
             ax_error.set_yticks([])
 
-        if digits_per_minute and error_rates:
-            dpm_arr = np.asarray(digits_per_minute, dtype=float)
-            error_arr = np.asarray(error_rates, dtype=float)
-
-            x_edges = np.histogram_bin_edges(dpm_arr, bins="auto")
-            y_edges = np.histogram_bin_edges(error_arr, bins="auto")
-
-            hist, xedges, yedges = np.histogram2d(
-                dpm_arr,
-                error_arr,
-                bins=[x_edges, y_edges]
-            )
-
-            x_positions = xedges[:-1]
-            y_positions = yedges[:-1]
-            x_sizes = np.diff(xedges)
-            y_sizes = np.diff(yedges)
-
-            xpos, ypos = np.meshgrid(
-                x_positions,
-                y_positions,
-                indexing="ij"
-            )
-            dx, dy = np.meshgrid(
-                x_sizes,
-                y_sizes,
-                indexing="ij"
-            )
-
-            xpos = xpos.ravel()
-            ypos = ypos.ravel()
-            dx = dx.ravel()
-            dy = dy.ravel()
-            dz = hist.ravel()
-
-            nonzero = dz > 0
-            xpos = xpos[nonzero]
-            ypos = ypos[nonzero]
-            dx = dx[nonzero]
-            dy = dy[nonzero]
-            dz = dz[nonzero]
-
-            if dz.size > 0:
-                ax_3d.bar3d(
-                    xpos,
-                    ypos,
-                    np.zeros_like(dz),
-                    dx,
-                    dy,
-                    dz,
-                    shade=True,
-                    color=palette["bar3d_color"]
-                )
-                ax_3d.set_title("Joint digits/minute and error distribution")
-                ax_3d.set_xlabel("Digits per minute")
-                ax_3d.set_ylabel("Error percentage (%)")
-                ax_3d.set_zlabel("Count")
-            else:
-                ax_3d.set_title("Joint digits/minute and error distribution")
-                ax_3d.text(
-                    0.5,
-                    0.5,
-                    0.5,
-                    "No combined data available",
-                    ha="center",
-                    va="center",
-                    color=palette["text_color"]
-                )
-                ax_3d.set_xticks([])
-                ax_3d.set_yticks([])
-                ax_3d.set_zticks([])
-        else:
-            ax_3d.set_title("Joint digits/minute and error distribution")
-            ax_3d.text(
-                0.5,
-                0.5,
-                0.5,
-                "No combined data available",
-                ha="center",
-                va="center",
-                color=palette["text_color"]
-            )
-            ax_3d.set_xticks([])
-            ax_3d.set_yticks([])
-            ax_3d.set_zticks([])
+        self._draw_joint_heatmap(
+            fig=fig,
+            ax=ax_joint,
+            x_values=digits_per_minute,
+            y_values=error_rates,
+            x_label="Digits per minute",
+            y_label="Error percentage (%)",
+            title="Joint digits/minute and error distribution",
+            palette=palette
+        )
 
         if daily_dates:
             positions = np.arange(len(daily_dates))
