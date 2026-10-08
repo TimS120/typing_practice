@@ -4,7 +4,9 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import unicodedata
 
-from .io_utils import TEXT_FILE_NAME, get__file_path, save_texts
+from .keyboard_layouts import character_coverage, character_label
+
+from .io_utils import TEXT_FILE_NAME, TEXT_LANGUAGES, get__file_path, save_texts
 
 SUGGESTED_CHARACTER_GOAL = 400
 
@@ -31,6 +33,7 @@ class TextManager:
         self.app = app
         self.entries = copy.deepcopy(app.text_entries)
         self.saved_entries = copy.deepcopy(self.entries)
+        self.coverage_window = None
         self.index = None
         self.drag_index = None
         self.loading = False
@@ -69,23 +72,35 @@ class TextManager:
                                               ("Move down", lambda: self.move(1)))):
             ttk.Button(actions, text=label, command=command).grid(row=i // 2, column=i % 2, sticky="ew", padx=2, pady=2)
 
+        ttk.Button(sidebar, text="Character coverage", command=self.open_coverage).grid(
+            row=3, column=0, sticky="ew", pady=(10, 0))
+
         editor = ttk.Frame(self.window, padding=10)
         editor.grid(row=0, column=1, sticky="nsew")
         editor.columnconfigure(0, weight=1)
-        editor.rowconfigure(3, weight=2)
-        editor.rowconfigure(5, weight=1)
+        editor.rowconfigure(4, weight=2)
+        editor.rowconfigure(6, weight=1)
         ttk.Label(editor, text="Text name").grid(row=0, column=0, sticky="w")
         self.name_var = tk.StringVar(self.window)
         self.name_entry = ttk.Entry(editor, textvariable=self.name_var, font=app.ui_font)
         self.name_entry.grid(row=1, column=0, sticky="ew", pady=(4, 10))
+        language_row = ttk.Frame(editor)
+        language_row.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        ttk.Label(language_row, text="Language (required)").pack(side="left", padx=(0, 8))
+        self.language_var = tk.StringVar(self.window)
+        self.language_entry = ttk.Combobox(language_row, textvariable=self.language_var,
+                                         values=("-", *TEXT_LANGUAGES), state="readonly", font=app.ui_font)
+        self.language_entry.pack(side="left", fill="x", expand=True)
+        self.language_entry.bind("<<ComboboxSelected>>", lambda event: event.widget.selection_clear())
+        self.language_var.trace_add("write", self.name_changed)
         self.name_var.trace_add("write", self.name_changed)
-        ttk.Label(editor, text="Edit text (wraps automatically; Enter adds a real newline)", wraplength=430).grid(row=2, column=0, sticky="w")
-        self.body = self.make_text(editor, 3, editable=True)
+        ttk.Label(editor, text="Edit text (wraps automatically; Enter adds a real newline)", wraplength=430).grid(row=3, column=0, sticky="w")
+        self.body = self.make_text(editor, 4, editable=True)
         self.body.bind("<<Modified>>", self.body_changed)
-        ttk.Label(editor, text="Whitespace preview: · space   ⇥ tab   ↵ newline   ⟦…⟧ other invisible characters", wraplength=430).grid(row=4, column=0, sticky="w", pady=(10, 4))
-        self.preview = self.make_text(editor, 5, editable=False)
+        ttk.Label(editor, text="Whitespace preview: · space   ⇥ tab   ↵ newline   ⟦…⟧ other invisible characters", wraplength=430).grid(row=5, column=0, sticky="w", pady=(10, 4))
+        self.preview = self.make_text(editor, 6, editable=False)
         self.count_var = tk.StringVar(self.window)
-        ttk.Label(editor, textvariable=self.count_var, wraplength=430).grid(row=6, column=0, sticky="w", pady=4)
+        ttk.Label(editor, textvariable=self.count_var, wraplength=430).grid(row=7, column=0, sticky="w", pady=4)
         footer = ttk.Frame(self.window, padding=10)
         footer.grid(row=1, column=0, columnspan=2, sticky="ew")
         self.status_var = tk.StringVar(self.window, value="Changes are saved only when you click Save changes.")
@@ -99,6 +114,85 @@ class TextManager:
         # ttk shares the app styles; classic Tk widgets need explicit colors.
         from .ui_utils import DARK_THEME, LIGHT_THEME
         self.apply_theme(DARK_THEME if app.dark_mode_enabled else LIGHT_THEME)
+
+    def entry_label(self, index):
+        entry = self.entries[index]
+        language = entry.get("language", "").strip()
+        if language not in TEXT_LANGUAGES:
+            return f"{index + 1:02d}  [Language required] {entry['name'] or '(unnamed)'}"
+        return f"{index + 1:02d}  {entry['name'] or '(unnamed)'} [{language}]"
+
+    def open_coverage(self):
+        if self.coverage_window is not None and self.coverage_window.winfo_exists():
+            self.coverage_window.lift()
+            self.refresh_coverage()
+            return
+        self.coverage_window = tk.Toplevel(self.app.master)
+        self.coverage_window.title("Character coverage — saved texts")
+        self.coverage_window.geometry("620x550")
+        self.coverage_window.minsize(520, 350)
+        self.coverage_window.transient(self.app.master)
+        page = ttk.Frame(self.coverage_window, padding=12)
+        page.pack(fill="both", expand=True)
+        page.columnconfigure(0, weight=1)
+        page.rowconfigure(3, weight=1)
+        self.coverage_info = tk.StringVar(page)
+        ttk.Label(page, textvariable=self.coverage_info, wraplength=570).grid(row=0, column=0, sticky="w")
+        controls = ttk.Frame(page)
+        controls.grid(row=1, column=0, sticky="ew", pady=10)
+        ttk.Label(controls, text="Show counts below").pack(side="left")
+        self.threshold_var = tk.StringVar(page, value=str(self.app.coverage_threshold))
+        ttk.Entry(controls, textvariable=self.threshold_var, width=10).pack(side="left", padx=8)
+        ttk.Button(controls, text="Apply", command=self.apply_threshold).pack(side="left")
+        ttk.Button(controls, text="Refresh", command=self.refresh_coverage).pack(side="left", padx=8)
+        self.coverage_status = tk.StringVar(page)
+        ttk.Label(page, textvariable=self.coverage_status, wraplength=570).grid(row=2, column=0, sticky="w")
+        self.coverage_table = ttk.Treeview(page, columns=("character", "code", "count"), show="headings", style="Coverage.Treeview")
+        for column, label, width in (("character", "Character", 180), ("code", "Unicode", 100), ("count", "Count", 90)):
+            self.coverage_table.heading(column, text=label, command=lambda c=column: self.sort_coverage(c))
+            self.coverage_table.column(column, width=width)
+        self.coverage_table.grid(row=3, column=0, sticky="nsew", pady=(8, 0))
+        scrollbar = ttk.Scrollbar(page, command=self.coverage_table.yview)
+        scrollbar.grid(row=3, column=1, sticky="ns", pady=(8, 0))
+        self.coverage_table.configure(yscrollcommand=scrollbar.set)
+        self.coverage_sort = ("count", False)
+        from .ui_utils import DARK_THEME, LIGHT_THEME
+        self.apply_coverage_theme(DARK_THEME if self.app.dark_mode_enabled else LIGHT_THEME)
+        self.refresh_coverage()
+
+    def apply_threshold(self):
+        try:
+            value = int(self.threshold_var.get())
+            if value < 0:
+                raise ValueError
+        except ValueError:
+            self.coverage_status.set("Enter a non-negative whole number.")
+            return
+        self.app.coverage_threshold = value
+        self.app._save_preferences()
+        self.refresh_coverage()
+
+    def sort_coverage(self, column):
+        old_column, reverse = self.coverage_sort
+        self.coverage_sort = (column, not reverse if column == old_column else False)
+        self.refresh_coverage()
+
+    def refresh_coverage(self):
+        if self.coverage_window is None or not self.coverage_window.winfo_exists():
+            return
+        characters = self.app.get_layout_characters()
+        rows = character_coverage(self.app.text_entries, characters, self.app.coverage_threshold)
+        column, reverse = self.coverage_sort
+        if column != "count" or reverse:
+            rows.sort(key=lambda row: (row[1], ord(row[0])) if column == "count"
+                      else ord(row[0]) if column == "code" else character_label(row[0]), reverse=reverse)
+        self.coverage_table.delete(*self.coverage_table.get_children())
+        for char, count in rows:
+            self.coverage_table.insert("", "end", values=(character_label(char), f"U+{ord(char):04X}", count))
+        self.coverage_info.set(f"Layout: {self.app.keyboard_layout_var.get()} · {len(self.app.text_entries)} saved texts. "
+                               "Counts combine all languages; uppercase, lowercase and whitespace are separate.")
+        self.coverage_status.set(f"{len(rows)} of {len(characters)} characters occur fewer than "
+                                 f"{self.app.coverage_threshold} times. Unsaved edits are excluded.")
 
     def make_text(self, parent, row, editable):
         frame = ttk.Frame(parent)
@@ -125,15 +219,22 @@ class TextManager:
                                selectbackground=theme["select_background"], selectforeground=theme["select_foreground"])
         if not self.embedded:
             self.app._set_native_title_bar_theme(self.window, self.app.dark_mode_enabled, theme)
+        self.apply_coverage_theme(theme)
+
+    def apply_coverage_theme(self, theme):
+        if self.coverage_window is not None and self.coverage_window.winfo_exists():
+            self.coverage_window.configure(bg=theme["background"])
+            self.app._set_native_title_bar_theme(self.coverage_window, self.app.dark_mode_enabled, theme)
 
     def commit_editor(self):
         if self.index is not None:
-            self.entries[self.index] = {"name": self.name_var.get(), "text": self.body.get("1.0", "end-1c")}
+            self.entries[self.index] = {"name": self.name_var.get(), "text": self.body.get("1.0", "end-1c"),
+                                        "language": "" if self.language_var.get() == "-" else self.language_var.get()}
 
     def refresh_list(self):
         self.listbox.delete(0, tk.END)
         for i, entry in enumerate(self.entries, 1):
-            self.listbox.insert(tk.END, f"{i:02d}  {entry['name'] or '(unnamed)'}")
+            self.listbox.insert(tk.END, self.entry_label(i - 1))
         if self.index is not None:
             self.listbox.selection_set(self.index)
             self.listbox.see(self.index)
@@ -142,14 +243,19 @@ class TextManager:
         self.loading = True
         self.index = index
         self.name_entry.configure(state="normal")
+        self.language_entry.configure(state="readonly")
         self.body.configure(state="normal")
         self.body.delete("1.0", tk.END)
         if index is not None:
             entry = self.entries[index]
             self.name_var.set(entry["name"])
+            language = entry.get("language", "")
+            self.language_var.set(language if language in TEXT_LANGUAGES else "-")
             self.body.insert("1.0", entry["text"])
         else:
             self.name_var.set("")
+            self.language_var.set("-")
+            self.language_entry.configure(state="disabled")
             self.name_entry.configure(state="disabled")
             self.body.configure(state="disabled")
         self.body.edit_reset()
@@ -184,7 +290,7 @@ class TextManager:
             self.commit_editor()
             if self.index is not None:
                 self.listbox.delete(self.index)
-                self.listbox.insert(self.index, f"{self.index + 1:02d}  {self.name_var.get() or '(unnamed)'}")
+                self.listbox.insert(self.index, self.entry_label(self.index))
                 self.listbox.selection_set(self.index)
             self.status_var.set("Unsaved changes")
 
@@ -204,7 +310,7 @@ class TextManager:
 
     def add(self):
         self.commit_editor()
-        self.entries.append({"name": "New text", "text": ""})
+        self.entries.append({"name": "New text", "text": "", "language": ""})
         self.show_entry(len(self.entries) - 1)
         self.status_var.set("Unsaved changes")
         self.name_entry.focus_set()
@@ -259,6 +365,7 @@ class TextManager:
         self.app.refresh_text_list()
         self.saved_entries = copy.deepcopy(self.entries)
         self.status_var.set("Changes saved")
+        self.refresh_coverage()
         return True
 
     def discard(self):
@@ -276,6 +383,8 @@ class TextManager:
             answer = messagebox.askyesnocancel("Unsaved texts", "Save changes before closing?", parent=self.window)
             if answer is None or (answer and not self.save()):
                 return False
+        if self.coverage_window is not None and self.coverage_window.winfo_exists():
+            self.coverage_window.destroy()
         self.window.destroy()
         self.app.text_manager = None
         return True

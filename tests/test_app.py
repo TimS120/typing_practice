@@ -27,10 +27,58 @@ class TemporaryData:
 
 
 class StorageTests(TemporaryData, unittest.TestCase):
+    def test_legacy_library_requires_explicit_language_without_rewriting(self):
+        path = io_utils.get__file_path(io_utils.TEXT_FILE_NAME)
+        io_utils.write_encrypted(path, json.dumps([{"name": "Old", "text": "Aa 1\n"}]))
+        original = path.read_bytes()
+        entries = io_utils.load_or_create_texts(path)
+        self.assertEqual(entries[0]["language"], "")
+        self.assertEqual(path.read_bytes(), original)
+        with self.assertRaisesRegex(ValueError, "Language required"):
+            io_utils.save_texts(path, entries)
+        self.assertEqual(path.read_bytes(), original)
+        entries[0]["language"] = "English"
+        io_utils.save_texts(path, entries)
+        self.assertEqual(io_utils.load_or_create_texts(path), entries)
+
+    def test_coverage_counts_all_languages_exactly_and_includes_zero(self):
+        from utils.keyboard_layouts import character_coverage
+        entries = [{"text": "Aa 1\t\n", "language": "English"},
+                   {"text": "aä1", "language": "German"}]
+        rows = dict(character_coverage(entries, "Aaä1? \t\n?", 2))
+        self.assertEqual(rows, {"A": 1, "ä": 1, "?": 0, " ": 1, "\t": 1, "\n": 1})
+        self.assertEqual(character_coverage(entries, "?", 0), [])
+
+    def test_layout_categories_preserve_superscript_symbols(self):
+        from utils.keyboard_layouts import drill_characters, LAYOUTS
+        characters = LAYOUTS["German QWERTZ"]
+        self.assertIn("²", drill_characters(characters, "special"))
+        self.assertIn("³", drill_characters(characters, "special"))
+        self.assertIn("ß", drill_characters(characters, "letter"))
+        self.assertNotIn(" ", drill_characters(characters, "special"))
+
+    def test_keyboard_preferences_validation(self):
+        settings = {"keyboard_layout": "Custom", "custom_characters": "aA? \t\n",
+                    "coverage_threshold": 0}
+        io_utils.save_settings(settings)
+        self.assertEqual(io_utils.load_settings(), settings)
+        io_utils.save_settings({"keyboard_layout": "Custom", "custom_characters": "", "coverage_threshold": True})
+        self.assertEqual(io_utils.load_settings(), {})
+
+    def test_saving_restricts_languages_to_supported_options(self):
+        path = io_utils.get__file_path(io_utils.TEXT_FILE_NAME)
+        for language in ("", "-", "French", "english"):
+            with self.subTest(language=language), self.assertRaises(ValueError):
+                io_utils.save_texts(path, [{"name": "Text", "text": "Content", "language": language}])
+        for language in ("English", "German"):
+            entries = [{"name": "Text", "text": "Content", "language": language}]
+            io_utils.save_texts(path, entries)
+            self.assertEqual(io_utils.load_or_create_texts(path), entries)
+
     def test_empty_library_and_exact_roundtrip(self):
         path = io_utils.get__file_path(io_utils.TEXT_FILE_NAME)
         self.assertEqual(io_utils.load_or_create_texts(path), [])
-        entries = [{"name": "Unicode ä", "text": " leading \t\n\nlast  \n"}]
+        entries = [{"name": "Unicode ä", "language": "German", "text": " leading \t\n\nlast  \n"}]
         io_utils.save_texts(path, entries)
         self.assertEqual(io_utils.load_or_create_texts(path), entries)
         self.assertNotIn(b"leading", path.read_bytes())
@@ -142,11 +190,157 @@ class GuiTests(TemporaryData, unittest.TestCase):
         self.detector.stop()
         super().tearDown()
 
+    def test_language_dropdown_is_readonly_and_dash_means_unassigned(self):
+        manager = self.app.text_manager
+        manager.add()
+        manager.body.insert("1.0", "Sample passage")
+        self.assertEqual(tuple(manager.language_entry.cget("values")), ("-", "English", "German"))
+        self.assertEqual(str(manager.language_entry.cget("state")), "readonly")
+        self.assertEqual(manager.language_var.get(), "-")
+        manager.language_entry.insert(0, "French")
+        self.assertEqual(manager.language_var.get(), "-")
+        manager.language_entry.current(1)
+        self.assertTrue(manager.save())
+        manager.add()
+        manager.body.insert("1.0", "Second passage")
+        manager.language_entry.current(2)
+        manager.show_entry(0)
+        self.assertEqual(str(manager.language_entry.cget("state")), "readonly")
+        self.assertEqual(manager.language_var.get(), "English")
+        manager.language_entry.current(0)
+        self.assertEqual(manager.entries[0]["language"], "")
+        self.assertIn("Language required", manager.listbox.get(0))
+        self.assertFalse(manager.save())
+
+    def test_coverage_table_and_headings_follow_live_theme_changes(self):
+        from utils.ui_utils import DARK_THEME, LIGHT_THEME
+        manager = self.app.text_manager
+        self.app.theme_var.set("Dark")
+        self.app.change_theme()
+        manager.open_coverage()
+        for preference, theme in (("Dark", DARK_THEME), ("Light", LIGHT_THEME), ("Dark", DARK_THEME)):
+            self.app.theme_var.set(preference)
+            self.app.change_theme()
+            self.root.update()
+            self.assertEqual(manager.coverage_window.cget("background"), theme["background"])
+            self.assertEqual(manager.coverage_table.cget("style"), "Coverage.Treeview")
+            for option in ("background", "fieldbackground"):
+                self.assertEqual(self.app.style.lookup("Coverage.Treeview", option), theme["surface"])
+            self.assertEqual(self.app.style.lookup("Coverage.Treeview", "foreground"), theme["text"])
+            self.assertEqual(self.app.style.lookup("Coverage.Treeview", "background", ("selected",)), theme["select_background"])
+            self.assertEqual(self.app.style.lookup("Coverage.Treeview.Heading", "background"), theme["button_background"])
+            self.assertEqual(self.app.style.lookup("Coverage.Treeview.Heading", "foreground"), theme["text"])
+            self.assertEqual(self.app.style.lookup("Coverage.Treeview.Heading", "background", ("active",)), theme["button_active_background"])
+        manager.coverage_window.destroy()
+        manager.open_coverage()
+        self.assertEqual(manager.coverage_window.cget("background"), DARK_THEME["background"])
+
+    def test_language_required_and_coverage_ignores_drafts(self):
+        self.app.open_text_manager()
+        manager = self.app.text_manager
+        manager.add()
+        manager.body.insert("1.0", "aA1 \t\n")
+        self.assertIn("Language required", manager.listbox.get(0))
+        self.assertFalse(manager.save())
+        manager.language_var.set("English")
+        self.assertTrue(manager.save())
+        manager.open_coverage()
+        def counts():
+            return {manager.coverage_table.item(i, "values")[1]: int(manager.coverage_table.item(i, "values")[2])
+                    for i in manager.coverage_table.get_children()}
+        self.assertEqual(counts()["U+0061"], 1)
+        manager.body.insert("end", "aaa")
+        manager.refresh_coverage()
+        self.assertEqual(counts()["U+0061"], 1)
+        self.assertTrue(manager.save())
+        self.assertEqual(counts()["U+0061"], 4)
+        manager.threshold_var.set("4")
+        manager.apply_threshold()
+        self.assertNotIn("U+0061", counts())
+        manager.threshold_var.set("bad")
+        manager.apply_threshold()
+        self.assertEqual(self.app.coverage_threshold, 4)
+        self.assertIn("whole number", manager.coverage_status.get())
+        self.app.keyboard_layout_var.set("US QWERTY")
+        self.app.change_keyboard_layout()
+        self.assertNotIn("U+00E4", counts())
+        self.assertIn("U+000A", counts())
+        self.app.keyboard_layout_var.set("German QWERTZ")
+        self.app.change_keyboard_layout()
+        self.assertEqual(counts()["U+00E4"], 0)
+
+    def test_click_loads_and_completed_input_is_immutable_until_reset(self):
+        self.app.text_entries = [{"name": "One", "text": "abc", "language": "English"},
+                                 {"name": "Two", "text": "xyz", "language": "German"}]
+        self.app.refresh_text_list()
+        self.app.text_listbox.selection_set(0)
+        self.app.text_listbox.event_generate("<<ListboxSelect>>")
+        self.root.update()
+        self.assertEqual(self.app.target_text, "abc")
+        self.app.input_text.insert("1.0", "abc")
+        self.root.update()
+        self.app.update_typing_state()
+        self.assertTrue(self.app.finished)
+        self.assertEqual(self.app.input_text.cget("state"), "disabled")
+        self.app.input_text.delete("1.0", "end")
+        self.app.input_text.insert("end", "changed")
+        self.app.input_text.event_generate("<<Paste>>")
+        self.assertEqual(self.app.input_text.get("1.0", "end-1c"), "abc")
+        self.app.handle_reset_button()
+        self.assertEqual(self.app.input_text.cget("state"), "normal")
+        self.assertEqual(self.app.input_text.get("1.0", "end-1c"), "")
+        self.app.text_listbox.selection_clear(0, "end")
+        self.app.text_listbox.selection_set(1)
+        self.app.text_listbox.event_generate("<<ListboxSelect>>")
+        self.root.update()
+        self.assertEqual(self.app.target_text, "xyz")
+        self.app.input_text.insert("end", "x")
+        self.app.handle_sudden_death_text_failure(0)
+        self.assertEqual(self.app.input_text.cget("state"), "disabled")
+        self.app.on_load_random()
+        self.assertEqual(self.app.input_text.cget("state"), "normal")
+
+    def test_helper_results_lock_in_all_modes_and_layouts_keep_categories(self):
+        import time
+        for mode in ("Standard", "Sudden death", "Blind mode"):
+            self.app.sudden_death_mode_var.set(mode)
+            self.app.on_sudden_death_mode_change(None)
+            for kind in ("letter", "special", "number"):
+                with self.subTest(mode=mode, kind=kind):
+                    self.app.keyboard_layout_var.set("US QWERTY")
+                    getattr(self.app, f"start_{kind}_mode")()
+                    pool = self.app._drill_characters
+                    self.assertNotIn("ä", pool)
+                    self.assertTrue(all(c.isalpha() if kind == "letter" else c.isdecimal() if kind == "number"
+                                        else not c.isalnum() and not c.isspace() for c in pool))
+                    self.app.start_time = time.time() - 1
+                    getattr(self.app, f"{kind}_input_history").append(pool[0])
+                    getattr(self.app, f"finish_{kind}_mode_session")(sudden_death=mode == "Sudden death")
+                    self.assertEqual(self.app.input_text.cget("state"), "disabled")
+                    before = self.app.input_text.get("1.0", "end-1c")
+                    self.app.input_text.delete("1.0", "end")
+                    self.assertEqual(self.app.input_text.get("1.0", "end-1c"), before)
+                    self.app.handle_reset_button()
+                    self.assertEqual(self.app.input_text.cget("state"), "normal")
+        self.app.custom_characters_editor.delete("1.0", "end")
+        self.app.custom_characters_editor.insert("1.0", "aA?1")
+        self.app.apply_custom_characters()
+        for kind in ("letter", "special", "number"):
+            getattr(self.app, f"start_{kind}_mode")()
+            self.assertEqual(len(getattr(self.app, f"{kind}_sequence")), 100)
+        self.app.custom_characters_editor.delete("1.0", "end")
+        self.app.custom_characters_editor.insert("1.0", "1")
+        self.app.apply_custom_characters()
+        with patch("tkinter.messagebox.showinfo") as info:
+            self.app.start_letter_mode()
+            info.assert_called_once()
+
     def test_edit_order_save_delete_and_exact_loaded_content(self):
         self.app.open_text_manager()
         manager = self.app.text_manager
         for name, text in (("First", " leading\t\n\ntrailing  \n"), ("Second", "äöü")):
             manager.add()
+            manager.language_var.set("German")
             manager.name_var.set(name)
             manager.body.insert("1.0", text)
         manager.move(-1)
@@ -169,6 +363,7 @@ class GuiTests(TemporaryData, unittest.TestCase):
         manager = self.app.text_manager
         for name in ("First", "Second", "Third"):
             manager.add()
+            manager.language_var.set("German")
             manager.name_var.set(name)
             manager.body.insert("1.0", name + " text")
         self.root.update()
@@ -185,6 +380,7 @@ class GuiTests(TemporaryData, unittest.TestCase):
         self.app.open_text_manager()
         manager = self.app.text_manager
         manager.add()
+        manager.language_var.set("German")
         self.assertFalse(manager.save())  # Empty text rejected.
         with patch("tkinter.messagebox.askyesnocancel", return_value=None):
             self.assertFalse(manager.close())
@@ -230,7 +426,8 @@ class GuiTests(TemporaryData, unittest.TestCase):
         self.assertEqual(self.app.theme_var.get(), "Dark")
         self.assertEqual((self.root.winfo_width(), self.root.winfo_height()), (1100, 640))
         self.assertFalse(self.app.training_run_var.get())
-        self.assertEqual(set(io_utils.load_settings()), {"theme", "font_size", "ui_font_size", "window_size"})
+        self.assertEqual(set(io_utils.load_settings()), {"theme", "font_size", "ui_font_size", "window_size",
+                                                         "keyboard_layout", "custom_characters", "coverage_threshold"})
 
     def test_layout_separates_practice_manager_and_statistics(self):
         self.assertEqual([self.app.app_tabs.tab(tab, "text") for tab in self.app.app_tabs.tabs()],
@@ -268,6 +465,7 @@ class GuiTests(TemporaryData, unittest.TestCase):
         self.app.open_text_manager()
         manager = self.app.text_manager
         manager.add()
+        manager.language_var.set("German")
         manager.name_var.set("Draft passage")
         manager.body.insert("1.0", "Unsaved draft text")
         self.root.update()

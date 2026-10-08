@@ -15,6 +15,7 @@ import tempfile
 from cryptography.fernet import Fernet, InvalidToken
 
 TEXT_FILE_NAME = "texts.json"
+TEXT_LANGUAGES = ("English", "German")
 STATS_FILE_NAME = "typing_stats.csv"
 LETTER_STATS_FILE_NAME = "letter_stats.csv"
 SPECIAL_STATS_FILE_NAME = "special_character_stats.csv"
@@ -159,14 +160,20 @@ def open_encrypted_stats(path: Path, mode: str = "r"):
         stream.close()
 
 
-def validate_texts(entries: list[dict[str, str]]) -> None:
+def validate_texts(entries: list[dict[str, str]], require_language: bool = True) -> None:
     if not isinstance(entries, list):
         raise ValueError("The text library must be a list.")
     for entry in entries:
-        if (not isinstance(entry, dict) or set(entry) != {"name", "text"}
+        if (not isinstance(entry, dict) or set(entry) not in ({"name", "text"}, {"name", "text", "language"})
                 or not isinstance(entry["name"], str) or not entry["name"].strip()
                 or not isinstance(entry["text"], str) or not entry["text"]):
             raise ValueError("Every text needs a name and non-empty content.")
+        if "language" in entry and not isinstance(entry["language"], str):
+            raise ValueError("Text language must be a string.")
+        if require_language and entry.get("language", "").strip() in ("", "-"):
+            raise ValueError(f"Language required for ‘{entry['name']}’. Set each text's language before saving.")
+        if require_language and entry["language"] not in TEXT_LANGUAGES:
+            raise ValueError("Text language must be English or German.")
 
 
 def load_or_create_texts(path: Path) -> list[dict[str, str]]:
@@ -175,8 +182,8 @@ def load_or_create_texts(path: Path) -> list[dict[str, str]]:
         return []
     try:
         entries = json.loads(read_encrypted(path))
-        validate_texts(entries)
-        return entries
+        validate_texts(entries, require_language=False)
+        return [dict(entry, language=entry.get("language", "")) for entry in entries]
     except DataError:
         raise
     except (ValueError, TypeError) as error:
@@ -218,6 +225,18 @@ def load_settings() -> dict:
     dimensions = settings.get("window_size")
     if isinstance(dimensions, str) and re.fullmatch(r"[1-9]\d{0,4}x[1-9]\d{0,4}", dimensions):
         result["window_size"] = dimensions
+    from .keyboard_layouts import LAYOUTS
+    layout = settings.get("keyboard_layout")
+    if layout in (*LAYOUTS, "Custom"):
+        result["keyboard_layout"] = layout
+    custom = settings.get("custom_characters")
+    if isinstance(custom, str) and custom:
+        result["custom_characters"] = custom
+    threshold = settings.get("coverage_threshold")
+    if type(threshold) is int and threshold >= 0:
+        result["coverage_threshold"] = threshold
+    if result.get("keyboard_layout") == "Custom" and not result.get("custom_characters"):
+        result.pop("keyboard_layout")
     return result
 
 

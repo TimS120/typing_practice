@@ -10,7 +10,6 @@ are stored in a statistics file and can be visualized.
 from __future__ import annotations
 
 import random
-import string
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -23,6 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 from .system_theme import system_prefers_dark
 from .text_manager import TextManager
 from .typing_input import normalize_wrapped_input
+from .keyboard_layouts import LAYOUTS, DEFAULT_LAYOUT, layout_characters, drill_characters
 
 
 import tkinter as tk
@@ -118,9 +118,7 @@ DEFAULT_FONT_SIZE = 12
 MIN_FONT_SIZE = 6
 MAX_FONT_SIZE = 48
 LETTER_SEQUENCE_LENGTH = 100
-LETTER_MODE_CHARACTERS = string.ascii_letters + "\u00e4\u00f6\u00fc\u00c4\u00d6\u00dc"
 SPECIAL_SEQUENCE_LENGTH = 100
-SPECIAL_MODE_CHARACTERS = string.punctuation + "\u00a7\u00b2\u00b3"
 NUMBER_SEQUENCE_LENGTH = 100
 TARGET_TEXT_DISPLAY_WIDTH = 90
 LIGHT_THEME = {
@@ -210,6 +208,9 @@ class TypingTrainerApp(PlotMixin):
         self.text_entries = texts
         self.texts = [entry["text"] for entry in texts]
         self.settings = load_settings()
+        self.keyboard_layout_var = tk.StringVar(master, value=self.settings.get("keyboard_layout", DEFAULT_LAYOUT))
+        self.custom_characters = self.settings.get("custom_characters", LAYOUTS[DEFAULT_LAYOUT])
+        self.coverage_threshold = self.settings.get("coverage_threshold", 10)
         self.text_manager = None
         self._loaded_typing_text = ""
         self._helper_kind = None
@@ -404,9 +405,10 @@ class TypingTrainerApp(PlotMixin):
         scroll.grid(row=1, column=1, sticky="ns")
         self.text_listbox.configure(yscrollcommand=scroll.set)
         self.refresh_text_list()
+        self.text_listbox.bind("<<ListboxSelect>>", self.on_load_selected)
         actions = ttk.Frame(library)
         actions.grid(row=2, column=0, sticky="ew", pady=(8, 0))
-        for label, command in (("Load selected", self.on_load_selected), ("Load random", self.on_load_random)):
+        for label, command in (("Load random", self.on_load_random),):
             ttk.Button(actions, text=label, command=command).pack(fill="x", pady=2)
         self._build_practice_input(typing_content, "typing", column=1)
 
@@ -474,8 +476,25 @@ class TypingTrainerApp(PlotMixin):
             ttk.Label(controls, textvariable=variable, width=7).pack(side="left", padx=(0, 12))
             for label, command in (("Smaller", smaller), ("Reset", reset), ("Larger", bigger)):
                 ttk.Button(controls, text=label, command=command).pack(side="left", padx=(0, 6))
-        ttk.Label(page, text="Changes are applied and saved automatically.", wraplength=750).grid(
-            row=3, column=0, sticky="w")
+        keyboard = ttk.LabelFrame(page, text="Keyboard layout", padding=14)
+        keyboard.grid(row=3, column=0, sticky="ew", pady=(0, 14))
+        ttk.Label(keyboard, text="Determines coverage characters and the Letters / Characters / Numbers drill sets. "
+                  "Text languages do not filter coverage.", wraplength=750).pack(anchor="w", pady=(0, 10))
+        picker = ttk.Combobox(keyboard, textvariable=self.keyboard_layout_var,
+                              values=(*LAYOUTS, "Custom"), state="readonly", font=self.ui_font, width=24)
+        picker.pack(anchor="w")
+        picker.bind("<<ComboboxSelected>>", self.change_keyboard_layout)
+        ttk.Label(keyboard, text="Custom characters (case-sensitive; Enter and Tab may be included). "
+                  "Apply to use this set; repeated characters count once.", wraplength=750).pack(anchor="w", pady=(10, 4))
+        self.custom_characters_editor = tk.Text(keyboard, height=4, wrap="char", font=self.text_font)
+        self.custom_characters_editor.pack(fill="x")
+        self.custom_characters_editor.insert("1.0", self.custom_characters)
+        ttk.Button(keyboard, text="Apply custom characters", command=self.apply_custom_characters).pack(anchor="w", pady=(8, 0))
+        self.layout_status = tk.StringVar(page)
+        ttk.Label(keyboard, textvariable=self.layout_status, wraplength=750).pack(anchor="w", pady=(8, 0))
+        self.layout_status.set(f"{len(self.get_layout_characters())} distinct characters in the selected layout.")
+        ttk.Label(page, text="Changes are applied and saved automatically, except custom character edits.", wraplength=750).grid(
+            row=4, column=0, sticky="w")
         self._update_settings_labels()
         def scroll_settings(event):
             if self.settings_canvas.yview() == (0.0, 1.0):
@@ -489,6 +508,33 @@ class TypingTrainerApp(PlotMixin):
             for child in widget.winfo_children():
                 bind_scroll(child)
         bind_scroll(viewport)
+
+    def get_layout_characters(self):
+        return layout_characters(self.keyboard_layout_var.get(), self.custom_characters)
+
+    def change_keyboard_layout(self, event=None):
+        # Sequences already in progress retain their captured character set.
+        self.layout_status.set(f"{len(self.get_layout_characters())} distinct characters. New drills use this layout.")
+        self._save_preferences()
+        if self.text_manager is not None:
+            self.text_manager.refresh_coverage()
+
+    def apply_custom_characters(self):
+        characters = self.custom_characters_editor.get("1.0", "end-1c")
+        if not characters:
+            self.layout_status.set("Enter at least one character before applying a custom layout.")
+            return
+        self.custom_characters = "".join(dict.fromkeys(characters))
+        self.keyboard_layout_var.set("Custom")
+        self.change_keyboard_layout()
+
+    def _prepare_drill_characters(self, kind):
+        characters = drill_characters(self.get_layout_characters(), kind)
+        if not characters:
+            messagebox.showinfo("Keyboard layout", f"The selected layout has no characters for the {kind} drill.", parent=self.master)
+            return False
+        self._drill_characters = characters
+        return True
 
     def _update_settings_labels(self):
         self.practice_font_size_var.set(f"{self.current_font_size} pt")
@@ -612,7 +658,7 @@ class TypingTrainerApp(PlotMixin):
         mode = self._get_sudden_death_mode_key()
         if self._active_tab_key == "typing":
             title = "Typing text"
-            instruction = "Select and load a text, then type it. Enter is optional at automatic wraps; saved newlines require Enter."
+            instruction = "Click a text to load it, then type it. Enter is optional at automatic wraps; saved newlines require Enter."
         else:
             names = {"letter": "Letters", "special": "Characters", "number": "Numbers"}
             title = names.get(self._helper_kind, "Helper modes")
@@ -789,6 +835,9 @@ class TypingTrainerApp(PlotMixin):
         save_settings({"theme": self.theme_var.get().lower(),
                        "font_size": self.current_font_size,
                        "ui_font_size": self.ui_font_size,
+                       "keyboard_layout": self.keyboard_layout_var.get(),
+                       "custom_characters": self.custom_characters,
+                       "coverage_threshold": self.coverage_threshold,
                        "window_size": f"{self.master.winfo_width()}x{self.master.winfo_height()}"})
 
     def close(self) -> None:
@@ -963,6 +1012,8 @@ class TypingTrainerApp(PlotMixin):
             self._update_input_visibility()
 
         self._render_typed_text_with_errors(typed_text, target_sequence)
+        self.finished = True
+        self.input_text.configure(state="disabled")
 
     def _apply_theme(self) -> None:
         """
@@ -989,6 +1040,9 @@ class TypingTrainerApp(PlotMixin):
         self.style.configure("Info.TLabel", background=theme["select_background"], foreground=theme["text"])
         self.stats_canvas.configure(background=theme["background"])
         self.settings_canvas.configure(background=theme["background"])
+        self.custom_characters_editor.configure(bg=theme["input_background"], fg=theme["text"],
+            insertbackground=theme["text"], selectbackground=theme["select_background"],
+            selectforeground=theme["select_foreground"])
         self.master.configure(bg=theme["background"])
 
         # ttk widget styling
@@ -1045,6 +1099,23 @@ class TypingTrainerApp(PlotMixin):
                              bordercolor=theme["border"], lightcolor=theme["border"], darkcolor=theme["border"])
         self.style.map("TScrollbar", background=[("active", theme["button_active_background"]),
                                                 ("pressed", theme["button_active_background"])])
+        self.style.configure("Coverage.Treeview", background=theme["surface"],
+                             fieldbackground=theme["surface"], foreground=theme["text"],
+                             bordercolor=theme["border"], lightcolor=theme["border"],
+                             darkcolor=theme["border"], font=self.ui_font,
+                             rowheight=max(24, self.ui_font.metrics("linespace") + 8))
+        self.style.map("Coverage.Treeview",
+                       background=[("selected", theme["select_background"])],
+                       foreground=[("selected", theme["select_foreground"])])
+        self.style.configure("Coverage.Treeview.Heading", background=theme["button_background"],
+                             foreground=theme["text"], bordercolor=theme["border"],
+                             lightcolor=theme["border"], darkcolor=theme["border"], font=self.ui_font)
+        self.style.map("Coverage.Treeview.Heading",
+                       background=[("pressed", theme["button_active_background"]),
+                                   ("active", theme["button_active_background"])],
+                       foreground=[("active", theme["text"])],
+                       lightcolor=[("active", theme["border"])],
+                       darkcolor=[("active", theme["border"])])
         self.style.configure("TEntry", fieldbackground=theme["input_background"],
                              foreground=theme["text"], insertcolor=theme["text"])
         self.style.map("TEntry", fieldbackground=[("readonly", theme["input_background"])])
@@ -1316,12 +1387,14 @@ class TypingTrainerApp(PlotMixin):
 
 
 
-    def on_load_selected(self) -> None:
+    def on_load_selected(self, event=None) -> None:
         """
         Load the text that is currently selected in the listbox.
         """
         selection = self.text_listbox.curselection()
         if not selection:
+            if event is not None:
+                return
             messagebox.showinfo(
                 "Selection",
                 "Please select a text in the list."
@@ -1411,7 +1484,9 @@ class TypingTrainerApp(PlotMixin):
             self.selected_text = ""
             self.target_text = ""
 
+        self.input_text.configure(state="normal")
         self.input_text.delete("1.0", tk.END)
+        self.input_text.edit_reset()
         self.input_text.tag_remove("error", "1.0", tk.END)
         self._soft_wrap_boundaries = set()
         self._wraps_captured = False
@@ -1491,6 +1566,8 @@ class TypingTrainerApp(PlotMixin):
         """
         Activate the single letter training mode with a new random sequence.
         """
+        if not self._prepare_drill_characters("letter"):
+            return
         self._choose_practice("helper")
         self._helper_kind = "letter"
         self.reset_session(clear_display=True)
@@ -1526,9 +1603,10 @@ class TypingTrainerApp(PlotMixin):
             self.letter_sequence[-1].lower() if self.letter_sequence else ""
         )
         target_length = len(self.letter_sequence) + chunk_size
+        can_avoid_repeat = len({c.lower() for c in self._drill_characters}) > 1
         while len(self.letter_sequence) < target_length:
-            candidate = random.choice(LETTER_MODE_CHARACTERS)
-            if previous_lower and candidate.lower() == previous_lower:
+            candidate = random.choice(self._drill_characters)
+            if can_avoid_repeat and previous_lower and candidate.lower() == previous_lower:
                 continue
             self.letter_sequence.append(candidate)
             previous_lower = candidate.lower()
@@ -1877,6 +1955,8 @@ class TypingTrainerApp(PlotMixin):
         """
         Start the special character training mode with random punctuation.
         """
+        if not self._prepare_drill_characters("special"):
+            return
         self._choose_practice("helper")
         self._helper_kind = "special"
         self.reset_session(clear_display=True)
@@ -1911,8 +1991,8 @@ class TypingTrainerApp(PlotMixin):
         previous_char = self.special_sequence[-1] if self.special_sequence else ""
         target_length = len(self.special_sequence) + chunk_size
         while len(self.special_sequence) < target_length:
-            candidate = random.choice(SPECIAL_MODE_CHARACTERS)
-            if previous_char and candidate == previous_char:
+            candidate = random.choice(self._drill_characters)
+            if len(self._drill_characters) > 1 and previous_char and candidate == previous_char:
                 continue
             self.special_sequence.append(candidate)
             previous_char = candidate
@@ -2253,6 +2333,8 @@ class TypingTrainerApp(PlotMixin):
         """
         Activate the numeric keypad training mode with a random digit sequence.
         """
+        if not self._prepare_drill_characters("number"):
+            return
         self._choose_practice("helper")
         self._helper_kind = "number"
         self.reset_session(clear_display=True)
@@ -2287,8 +2369,8 @@ class TypingTrainerApp(PlotMixin):
         previous_digit = self.number_sequence[-1] if self.number_sequence else ""
         target_length = len(self.number_sequence) + chunk_size
         while len(self.number_sequence) < target_length:
-            candidate = random.choice(string.digits)
-            if previous_digit and candidate == previous_digit:
+            candidate = random.choice(self._drill_characters)
+            if len(self._drill_characters) > 1 and previous_digit and candidate == previous_digit:
                 continue
             self.number_sequence.append(candidate)
             previous_digit = candidate
@@ -2637,6 +2719,9 @@ class TypingTrainerApp(PlotMixin):
         updates of WPM and error highlighting. If the text is already finished,
         additional key presses do not change the statistics.
         """
+        if self.finished:
+            return
+
         if self.is_letter_mode:
             self.handle_letter_mode_keypress(event)
             return
@@ -2849,6 +2934,7 @@ class TypingTrainerApp(PlotMixin):
 
         self.sudden_death_failure_triggered = True
         self.finished = True
+        self.input_text.configure(state="disabled")
 
         if self.update_job_id is not None:
             self.master.after_cancel(self.update_job_id)
@@ -2969,6 +3055,7 @@ class TypingTrainerApp(PlotMixin):
             return
 
         self.finished = True
+        self.input_text.configure(state="disabled")
 
         if self.update_job_id is not None:
             self.master.after_cancel(self.update_job_id)
