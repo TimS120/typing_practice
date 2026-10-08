@@ -212,6 +212,9 @@ def load_settings() -> dict:
     size = settings.get("font_size")
     if type(size) is int and 6 <= size <= 48:
         result["font_size"] = size
+    ui_size = settings.get("ui_font_size")
+    if type(ui_size) is int and 8 <= ui_size <= 24:
+        result["ui_font_size"] = ui_size
     dimensions = settings.get("window_size")
     if isinstance(dimensions, str) and re.fullmatch(r"[1-9]\d{0,4}x[1-9]\d{0,4}", dimensions):
         result["window_size"] = dimensions

@@ -27,19 +27,24 @@ def visible_whitespace(text: str) -> str:
 
 
 class TextManager:
-    def __init__(self, app):
+    def __init__(self, app, parent=None):
         self.app = app
         self.entries = copy.deepcopy(app.text_entries)
         self.saved_entries = copy.deepcopy(self.entries)
         self.index = None
         self.drag_index = None
         self.loading = False
-        self.window = tk.Toplevel(app.master)
-        self.window.title("Manage texts")
-        self.window.geometry("950x650")
-        self.window.minsize(700, 450)
-        self.window.transient(app.master)
-        self.window.protocol("WM_DELETE_WINDOW", self.close)
+        self.embedded = parent is not None
+        if self.embedded:
+            self.window = ttk.Frame(parent)
+            self.window.pack(fill="both", expand=True)
+        else:
+            self.window = tk.Toplevel(app.master)
+            self.window.title("Manage texts")
+            self.window.geometry("950x650")
+            self.window.minsize(700, 450)
+            self.window.transient(app.master)
+            self.window.protocol("WM_DELETE_WINDOW", self.close)
         self.window.columnconfigure(1, weight=1)
         self.window.rowconfigure(0, weight=1)
 
@@ -48,7 +53,7 @@ class TextManager:
         sidebar.rowconfigure(1, weight=1)
         sidebar.columnconfigure(0, weight=1)
         ttk.Label(sidebar, text="Texts (drag to reorder)").grid(row=0, column=0, sticky="w")
-        self.listbox = tk.Listbox(sidebar, width=27, exportselection=False)
+        self.listbox = tk.Listbox(sidebar, width=27, exportselection=False, font=app.ui_font)
         self.listbox.grid(row=1, column=0, sticky="nsew", pady=8)
         list_scroll = ttk.Scrollbar(sidebar, orient="vertical", command=self.listbox.yview)
         list_scroll.grid(row=1, column=1, sticky="ns", pady=8)
@@ -71,7 +76,7 @@ class TextManager:
         editor.rowconfigure(5, weight=1)
         ttk.Label(editor, text="Text name").grid(row=0, column=0, sticky="w")
         self.name_var = tk.StringVar(self.window)
-        self.name_entry = ttk.Entry(editor, textvariable=self.name_var)
+        self.name_entry = ttk.Entry(editor, textvariable=self.name_var, font=app.ui_font)
         self.name_entry.grid(row=1, column=0, sticky="ew", pady=(4, 10))
         self.name_var.trace_add("write", self.name_changed)
         ttk.Label(editor, text="Edit text (wraps automatically; Enter adds a real newline)", wraplength=430).grid(row=2, column=0, sticky="w")
@@ -84,9 +89,11 @@ class TextManager:
         footer = ttk.Frame(self.window, padding=10)
         footer.grid(row=1, column=0, columnspan=2, sticky="ew")
         self.status_var = tk.StringVar(self.window, value="Changes are saved only when you click Save changes.")
-        ttk.Label(footer, textvariable=self.status_var).pack(side="left")
-        ttk.Button(footer, text="Close", command=self.close).pack(side="right", padx=4)
-        ttk.Button(footer, text="Save changes", command=self.save).pack(side="right", padx=4)
+        footer.columnconfigure(0, weight=1)
+        ttk.Label(footer, textvariable=self.status_var, wraplength=450).grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ttk.Button(footer, text="Discard changes" if self.embedded else "Close",
+                   command=self.discard if self.embedded else self.close).grid(row=0, column=2, padx=4)
+        ttk.Button(footer, text="Save changes", command=self.save).grid(row=0, column=1, padx=4)
         self.refresh_list()
         self.show_entry(0 if self.entries else None)
         # ttk shares the app styles; classic Tk widgets need explicit colors.
@@ -108,14 +115,16 @@ class TextManager:
         return widget
 
     def apply_theme(self, theme):
-        self.window.configure(bg=theme["background"])
+        if not self.embedded:
+            self.window.configure(bg=theme["background"])
         for widget in (self.body, self.preview):
             widget.configure(bg=theme["input_background"], fg=theme["text"],
                              insertbackground=theme["text"], selectbackground=theme["select_background"],
                              selectforeground=theme["select_foreground"], highlightbackground=theme["border"])
         self.listbox.configure(bg=theme["surface"], fg=theme["text"],
                                selectbackground=theme["select_background"], selectforeground=theme["select_foreground"])
-        self.app._set_native_title_bar_theme(self.window, self.app.dark_mode_enabled, theme)
+        if not self.embedded:
+            self.app._set_native_title_bar_theme(self.window, self.app.dark_mode_enabled, theme)
 
     def commit_editor(self):
         if self.index is not None:
@@ -251,6 +260,15 @@ class TextManager:
         self.saved_entries = copy.deepcopy(self.entries)
         self.status_var.set("Changes saved")
         return True
+
+    def discard(self):
+        self.commit_editor()
+        if self.entries != self.saved_entries and not messagebox.askyesno(
+                "Discard changes", "Discard unsaved changes to your texts?", parent=self.window):
+            return
+        self.entries = copy.deepcopy(self.saved_entries)
+        self.show_entry(0 if self.entries else None)
+        self.status_var.set("Changes discarded")
 
     def close(self):
         self.commit_editor()

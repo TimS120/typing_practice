@@ -975,7 +975,7 @@ class PlotMixin:
         If no statistics file exists or no valid values can be read, an
         information dialog is shown instead.
         """
-        if self.is_blind_mode_active():
+        if self._get_plot_mode_key() == "blind":
             self._show_blind_stats(
                 file_path=self.blind_typing_stats_file_path,
                 header=BLIND_TYPING_STATS_FILE_HEADER,
@@ -985,7 +985,7 @@ class PlotMixin:
             )
             return
 
-        if self.is_sudden_death_active():
+        if self._get_plot_mode_key() == "sudden":
             self._show_sudden_death_stats(
                 file_path=self.sudden_death_typing_stats_file_path,
                 header=SUDDEN_DEATH_TYPING_STATS_FILE_HEADER,
@@ -1285,7 +1285,7 @@ class PlotMixin:
         """
         Visualize stored letter mode statistics (letters per minute and errors).
         """
-        if self.is_blind_mode_active():
+        if self._get_plot_mode_key() == "blind":
             self._show_blind_stats(
                 file_path=self.blind_letter_stats_file_path,
                 header=BLIND_LETTER_STATS_FILE_HEADER,
@@ -1295,7 +1295,7 @@ class PlotMixin:
             )
             return
 
-        if self.is_sudden_death_active():
+        if self._get_plot_mode_key() == "sudden":
             self._show_sudden_death_stats(
                 file_path=self.sudden_death_letter_stats_file_path,
                 header=SUDDEN_DEATH_LETTER_STATS_FILE_HEADER,
@@ -1575,7 +1575,7 @@ class PlotMixin:
         """
         Visualize stored special character mode statistics.
         """
-        if self.is_blind_mode_active():
+        if self._get_plot_mode_key() == "blind":
             self._show_blind_stats(
                 file_path=self.blind_special_stats_file_path,
                 header=BLIND_SPECIAL_STATS_FILE_HEADER,
@@ -1585,7 +1585,7 @@ class PlotMixin:
             )
             return
 
-        if self.is_sudden_death_active():
+        if self._get_plot_mode_key() == "sudden":
             self._show_sudden_death_stats(
                 file_path=self.sudden_death_special_stats_file_path,
                 header=SUDDEN_DEATH_SPECIAL_STATS_FILE_HEADER,
@@ -1865,7 +1865,7 @@ class PlotMixin:
         """
         Visualize stored number mode statistics.
         """
-        if self.is_blind_mode_active():
+        if self._get_plot_mode_key() == "blind":
             self._show_blind_stats(
                 file_path=self.blind_number_stats_file_path,
                 header=BLIND_NUMBER_STATS_FILE_HEADER,
@@ -1875,7 +1875,7 @@ class PlotMixin:
             )
             return
 
-        if self.is_sudden_death_active():
+        if self._get_plot_mode_key() == "sudden":
             self._show_sudden_death_stats(
                 file_path=self.sudden_death_number_stats_file_path,
                 header=SUDDEN_DEATH_NUMBER_STATS_FILE_HEADER,

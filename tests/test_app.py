@@ -84,7 +84,7 @@ class StorageTests(TemporaryData, unittest.TestCase):
         self.assertEqual(len(list(io_utils.get_data_dir().glob("*.enc"))), 12)
 
     def test_settings_roundtrip_and_validation(self):
-        expected = {"theme": "dark", "font_size": 20, "window_size": "1000x650"}
+        expected = {"theme": "dark", "font_size": 20, "ui_font_size": 14, "window_size": "1000x650"}
         io_utils.save_settings(expected)
         self.assertEqual(io_utils.load_settings(), expected)
         path = io_utils.get_data_dir() / "settings.json"
@@ -230,7 +230,91 @@ class GuiTests(TemporaryData, unittest.TestCase):
         self.assertEqual(self.app.theme_var.get(), "Dark")
         self.assertEqual((self.root.winfo_width(), self.root.winfo_height()), (1100, 640))
         self.assertFalse(self.app.training_run_var.get())
-        self.assertEqual(set(io_utils.load_settings()), {"theme", "font_size", "window_size"})
+        self.assertEqual(set(io_utils.load_settings()), {"theme", "font_size", "ui_font_size", "window_size"})
+
+    def test_layout_separates_practice_manager_and_statistics(self):
+        self.assertEqual([self.app.app_tabs.tab(tab, "text") for tab in self.app.app_tabs.tabs()],
+                         ["Typing", "Text management", "Statistics", "Settings"])
+        self.assertTrue(self.app.text_manager.embedded)
+        self.assertEqual(self.app.text_manager.window.winfo_toplevel(), self.root)
+        self.assertEqual(self.app.training_toggle.master.master, self.app.practice_page)
+        self.assertEqual(self.app.sudden_death_mode_combobox.master, self.app.training_toggle.master)
+
+    def test_every_drill_and_submode_has_help_and_typing_switch_clears_helper(self):
+        target, boundary = self.load_wrapped_text()
+        for mode in ("Standard", "Sudden death", "Blind mode"):
+            self.app.sudden_death_mode_var.set(mode)
+            self.app.on_sudden_death_mode_change()
+            self.app._choose_practice("typing")
+            self.assertIn("Typing text", self.app.description_var.get())
+            self.assertIn(mode, self.app.description_var.get())
+            for name, start in (("Letters", self.app.start_letter_mode),
+                                ("Characters", self.app.start_special_mode),
+                                ("Numbers", self.app.start_number_mode)):
+                start()
+                self.assertIn(name, self.app.description_var.get())
+                self.assertIn(mode, self.app.description_var.get())
+                self.assertEqual(self.app._active_tab_key, "helper")
+                self.app._choose_practice("typing")
+                self.assertFalse(self.app.is_letter_mode or self.app.is_special_mode or self.app.is_number_mode)
+                self.assertEqual(self.app.target_text, target)
+                self.assertIn("Typing text", self.app.description_var.get())
+                self.assertNotIn("Number mode", self.app.info_text_var.get())
+        self.app.training_run_var.set(True)
+        self.app._refresh_mode_description()
+        self.assertIn("Training run", self.app.description_var.get())
+
+    def test_text_manager_drafts_survive_navigation(self):
+        self.app.open_text_manager()
+        manager = self.app.text_manager
+        manager.add()
+        manager.name_var.set("Draft passage")
+        manager.body.insert("1.0", "Unsaved draft text")
+        self.root.update()
+        self.app.app_tabs.select(self.app.statistics_page)
+        self.root.update()
+        self.app.open_text_manager()
+        self.root.update()
+        self.assertIs(self.app.text_manager, manager)
+        self.assertEqual(manager.body.get("1.0", "end-1c"), "Unsaved draft text")
+        self.assertTrue(manager.save())
+        self.assertIn("Draft passage", self.app.text_listbox.get(0))
+
+    def test_statistics_mode_does_not_change_practice(self):
+        self.app.start_number_mode()
+        self.app.app_tabs.select(self.app.statistics_page)
+        self.app.stats_mode_var.set("Blind mode")
+        with patch.object(self.app, "_show_blind_stats") as show:
+            self.app.show_number_stats()
+            show.assert_called_once()
+            self.assertEqual(show.call_args.kwargs["file_path"], self.app.blind_number_stats_file_path)
+        self.assertEqual(self.app.sudden_death_mode_var.get(), "Standard")
+        self.assertTrue(self.app.is_number_mode)
+
+    def test_ui_text_size_is_independent_and_restored(self):
+        self.app.change_ui_font_size(3)
+        self.assertEqual(self.app.ui_font.actual("size"), 13)
+        self.assertEqual(self.app.text_font.actual("size"), 12)
+        self.assertEqual(str(self.app.text_manager.name_entry.cget("font")), str(self.app.ui_font))
+        self.app.increase_font_size()
+        self.assertEqual(self.app.ui_font.actual("size"), 13)
+        self.app.close()
+        from utils.ui_utils import TypingTrainerApp
+        import tkinter as tk
+        self.root = tk.Tk()
+        self.app = TypingTrainerApp(self.root, [])
+        self.root.update()
+        self.assertEqual(self.app.ui_font.actual("size"), 13)
+        self.assertEqual(self.app.text_font.actual("size"), 14)
+
+    def test_statistics_page_scrolls_when_ui_text_is_larger(self):
+        self.root.geometry("1000x550")
+        self.app.change_ui_font_size(4)
+        self.app.app_tabs.select(self.app.statistics_page)
+        self.root.update()
+        self.assertLess(self.app.stats_canvas.yview()[1], 1.0)
+        self.app.stats_canvas.yview_moveto(1)
+        self.assertEqual(self.app.stats_canvas.yview()[1], 1.0)
 
     def load_wrapped_text(self):
         self.app.text_entries = [{"name": "Wrapping", "text": ("alpha beta gamma delta " * 15) + "\nRequired newline."}]
@@ -372,7 +456,7 @@ class GuiTests(TemporaryData, unittest.TestCase):
             writer(**arguments)
         with patch.object(plt, "show"), patch("tkinter.messagebox.showinfo"):
             for mode in ("Standard", "Sudden death", "Blind mode"):
-                self.app.sudden_death_mode_var.set(mode)
+                self.app.stats_mode_var.set(mode)
                 for show in (self.app.show_stats, self.app.show_letter_stats,
                              self.app.show_special_stats, self.app.show_number_stats, self.app.show_general_stats):
                     show()
