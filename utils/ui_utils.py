@@ -12,23 +12,22 @@ from __future__ import annotations
 import random
 import string
 import time
-import textwrap
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, List
 import ctypes
 from ctypes import wintypes
 import sys
+from concurrent.futures import ThreadPoolExecutor
+
+from .system_theme import system_prefers_dark
+from .text_manager import TextManager
+from .typing_input import normalize_wrapped_input
 
 
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk, messagebox
-
-try:
-    import winreg
-except ImportError:
-    winreg = None
 
 from .backend import (
     calculate_end_error_percentage,
@@ -72,8 +71,9 @@ from .io_utils import (
     SUDDEN_DEATH_TYPING_STATS_FILE_HEADER,
     SUDDEN_DEATH_TYPING_STATS_FILE_NAME,
     TRAINING_FLAG_COLUMN,
-    ensure_stats_file_header,
     get__file_path,
+    load_settings,
+    save_settings,
 )
 
 GA_ROOT = 2
@@ -123,7 +123,6 @@ SPECIAL_SEQUENCE_LENGTH = 100
 SPECIAL_MODE_CHARACTERS = string.punctuation + "\u00a7\u00b2\u00b3"
 NUMBER_SEQUENCE_LENGTH = 100
 TARGET_TEXT_DISPLAY_WIDTH = 90
-TARGET_TEXT_LINE_LENGTH = 80
 LIGHT_THEME = {
     "background": "#f4f6fb",
     "surface": "#ffffff",
@@ -200,7 +199,7 @@ class TypingTrainerApp(PlotMixin):
     file. A histogram of all stored WPM values can be shown.
     """
 
-    def __init__(self, master: tk.Tk, texts: List[str]) -> None:
+    def __init__(self, master: tk.Tk, texts: list[dict[str, str]]) -> None:
         """
         Initialize the GUI and internal state.
 
@@ -208,10 +207,19 @@ class TypingTrainerApp(PlotMixin):
         :param texts: List of training texts.
         """
         self.master = master
-        self.texts = texts
+        self.text_entries = texts
+        self.texts = [entry["text"] for entry in texts]
+        self.settings = load_settings()
+        self.text_manager = None
+        self._theme_job = None
+        self._settings_job = None
+        self._theme_future = None
+        self._theme_executor = ThreadPoolExecutor(max_workers=1)
 
         self.selected_text: str = ""
         self.target_text: str = ""
+        self._soft_wrap_boundaries: set[int] = set()
+        self._wraps_captured = False
         self.start_time: float | None = None
         self.update_job_id: str | None = None
         self.finished: bool = False
@@ -246,7 +254,7 @@ class TypingTrainerApp(PlotMixin):
             BLIND_NUMBER_STATS_FILE_NAME
         )
 
-        self.current_font_size: int = DEFAULT_FONT_SIZE
+        self.current_font_size: int = self.settings.get("font_size", DEFAULT_FONT_SIZE)
         self.text_font: tkfont.Font | None = None
         self.error_count: int = 0
         self.correct_count: int = 0
@@ -275,11 +283,9 @@ class TypingTrainerApp(PlotMixin):
         self.number_input_history: List[str] = []
         self.last_session_mode: str = "typing"
         self.style = ttk.Style()
-        self.dark_mode_enabled: bool = self._detect_system_dark_mode()
-        self.dark_mode_var = tk.BooleanVar(
-            master=self.master,
-            value=self.dark_mode_enabled
-        )
+        self.theme_var = tk.StringVar(master=self.master, value=self.settings.get("theme", "system").title())
+        self.dark_mode_enabled = (self._detect_system_dark_mode() if self.theme_var.get() == "System"
+                                  else self.theme_var.get() == "Dark")
         self.sudden_death_enabled: bool = False
         default_sd_mode_label = SUDDEN_DEATH_MODE_LABEL_BY_KEY[
             DEFAULT_SUDDEN_DEATH_MODE_KEY
@@ -301,6 +307,9 @@ class TypingTrainerApp(PlotMixin):
         self.sudden_death_mode_combobox: ttk.Combobox | None = None
 
         self._build_gui()
+        self.master.protocol("WM_DELETE_WINDOW", self.close)
+        self.master.bind("<Configure>", self._on_window_resize, add="+")
+        self._theme_job = self.master.after(2000, self._poll_system_theme)
 
 
     def _build_gui(self) -> None:
@@ -309,14 +318,15 @@ class TypingTrainerApp(PlotMixin):
         """
         self.master.title("Typing Trainer")
 
-        self.master.geometry(GUI_WINDOW_XY)
+        self.master.geometry(self.settings.get("window_size", GUI_WINDOW_XY))
 
         self.master.columnconfigure(0, weight=1)
         self.master.rowconfigure(0, weight=1)
 
         self.info_text_var = tk.StringVar(
             master=self.master,
-            value="Select a text on the left and click Load."
+            value=("Select a text on the left and click Load." if self.texts
+                   else "No texts yet. Click Manage texts to add your first passage.")
         )
         self.stats_summary_var = tk.StringVar(
             master=self.master,
@@ -339,13 +349,12 @@ class TypingTrainerApp(PlotMixin):
         header_frame.columnconfigure(3, weight=1)
         header_frame.columnconfigure(4, weight=0)
 
-        self.dark_mode_toggle = ttk.Checkbutton(
-            header_frame,
-            text="Dark mode",
-            variable=self.dark_mode_var,
-            command=self.toggle_dark_mode
+        self.theme_selector = ttk.Combobox(
+            header_frame, textvariable=self.theme_var,
+            values=("System", "Light", "Dark"), state="readonly", width=9
         )
-        self.dark_mode_toggle.grid(row=0, column=0, sticky="w")
+        self.theme_selector.grid(row=0, column=0, sticky="w")
+        self.theme_selector.bind("<<ComboboxSelected>>", self.change_theme)
 
         sudden_death_mode_values = [
             label for _, label in SUDDEN_DEATH_MODE_OPTIONS
@@ -449,12 +458,7 @@ class TypingTrainerApp(PlotMixin):
         )
         self.text_listbox.grid(row=1, column=0, sticky="ns")
 
-        for idx, text in enumerate(self.texts, start=1):
-            first_line = text.splitlines()[0] if text.splitlines() else text
-            preview = (
-                first_line if len(first_line) <= 40 else first_line[:37] + "..."
-            )
-            self.text_listbox.insert(tk.END, f"{idx:02d}  {preview}")
+        self.refresh_text_list()
 
         button_frame = ttk.Frame(list_frame)
         button_frame.grid(row=2, column=0, sticky="ew", pady=(8, 0))
@@ -474,6 +478,9 @@ class TypingTrainerApp(PlotMixin):
             command=self.on_load_random
         )
         random_button.grid(row=0, column=1, sticky="ew", padx=(4, 0))
+
+        ttk.Button(button_frame, text="Manage texts", command=self.open_text_manager).grid(
+            row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
 
         typing_text_area = ttk.Frame(typing_content)
         typing_text_area.grid(row=0, column=1, sticky="nsew")
@@ -520,6 +527,7 @@ class TypingTrainerApp(PlotMixin):
         )
 
         typing_input_text.bind("<Key>", self.on_key_press)
+        typing_input_text.bind("<<Modified>>", self._on_typing_input_changed)
 
         self.display_text_widgets["typing"] = typing_display_text
         self.input_text_widgets["typing"] = typing_input_text
@@ -774,13 +782,68 @@ class TypingTrainerApp(PlotMixin):
         """
         if self.text_font is not None:
             self.text_font.configure(size=self.current_font_size)
+        self._save_preferences()
 
-    def toggle_dark_mode(self) -> None:
-        """
-        Enable or disable the dark theme for the UI.
-        """
-        self.dark_mode_enabled = bool(self.dark_mode_var.get())
+    def refresh_text_list(self) -> None:
+        self.texts = [entry["text"] for entry in self.text_entries]
+        self.text_listbox.delete(0, tk.END)
+        for index, entry in enumerate(self.text_entries, 1):
+            self.text_listbox.insert(tk.END, f"{index:02d}  {entry['name']}")
+
+    def open_text_manager(self) -> None:
+        if self.text_manager is not None and self.text_manager.window.winfo_exists():
+            self.text_manager.window.lift()
+            return
+        self.text_manager = TextManager(self)
+
+    def change_theme(self, event=None) -> None:
+        preference = self.theme_var.get().lower()
+        self.dark_mode_enabled = (self._detect_system_dark_mode() if preference == "system"
+                                  else preference == "dark")
         self._apply_theme()
+        self._save_preferences()
+
+    def _poll_system_theme(self) -> None:
+        if self.theme_var.get() == "System":
+            if self._theme_future is None:
+                self._theme_future = self._theme_executor.submit(self._detect_system_dark_mode)
+            elif self._theme_future.done():
+                dark = self._theme_future.result()
+                self._theme_future = None
+                if dark != self.dark_mode_enabled:
+                    self.dark_mode_enabled = dark
+                    self._apply_theme()
+        self._theme_job = self.master.after(1000, self._poll_system_theme)
+
+    def _on_window_resize(self, event) -> None:
+        if event.widget is self.master:
+            if self._settings_job is not None:
+                self.master.after_cancel(self._settings_job)
+            self._settings_job = self.master.after(400, self._save_preferences)
+
+    def _save_preferences(self) -> None:
+        if self._settings_job is not None:
+            self.master.after_cancel(self._settings_job)
+        self._settings_job = None
+        save_settings({"theme": self.theme_var.get().lower(),
+                       "font_size": self.current_font_size,
+                       "window_size": f"{self.master.winfo_width()}x{self.master.winfo_height()}"})
+
+    def close(self) -> None:
+        if self.text_manager is not None and self.text_manager.window.winfo_exists():
+            if not self.text_manager.close():
+                return
+        try:
+            self._save_preferences()
+        except OSError as error:
+            messagebox.showerror("Settings", f"Could not save settings: {error}", parent=self.master)
+            return
+        for job in (self._theme_job, self._settings_job, self._title_bar_refresh_job, self.update_job_id):
+            if job is not None:
+                self.master.after_cancel(job)
+        self._theme_executor.shutdown(wait=False, cancel_futures=True)
+        self.master.destroy()
+
 
     def is_sudden_death_active(self) -> bool:
         """
@@ -879,7 +942,7 @@ class TypingTrainerApp(PlotMixin):
             self.display_text.configure(state="disabled")
             return
         if typed_length is None:
-            typed_length = len(self.input_text.get("1.0", "end-1c"))
+            typed_length = len(self._read_typing_input()[0])
         if typed_length >= len(self.target_text):
             self.display_text.configure(state="disabled")
             return
@@ -898,7 +961,9 @@ class TypingTrainerApp(PlotMixin):
         self.blind_reveal_active = True
         self._update_input_visibility()
 
-        self._render_typed_text_with_errors(typed_text, self.target_text)
+        normalized, offsets = self._read_typing_input()
+        self.highlight_errors(normalized, offsets)
+        self.input_text.see("end")
 
     def _render_typed_text_with_errors(
         self,
@@ -963,14 +1028,19 @@ class TypingTrainerApp(PlotMixin):
         self.style.configure(
             "TButton",
             background=theme["button_background"],
-            foreground=theme["button_foreground"]
+            foreground=theme["button_foreground"],
+            bordercolor=theme["border"], lightcolor=theme["border"], darkcolor=theme["border"]
         )
         self.style.map(
             "TButton",
             background=[
-                ("active", theme["button_active_background"]),
-                ("pressed", theme["button_active_background"])
-            ]
+                ("pressed", theme["button_active_background"]),
+                ("active", theme["button_active_background"])
+            ],
+            foreground=[("disabled", theme["muted_text"]), ("active", theme["button_foreground"])],
+            bordercolor=[("active", theme["border"])],
+            lightcolor=[("active", theme["button_active_background"])],
+            darkcolor=[("active", theme["button_active_background"])]
         )
         self.style.configure(
             "TLabelframe",
@@ -988,6 +1058,23 @@ class TypingTrainerApp(PlotMixin):
             background=theme["background"],
             foreground=theme["text"]
         )
+        self.style.map(
+            "TCheckbutton",
+            background=[("active", theme["background"]), ("selected", theme["background"])],
+            foreground=[("disabled", theme["muted_text"]), ("active", theme["text"])],
+            indicatorbackground=[("selected", theme["accent"]), ("active", theme["button_active_background"])],
+            indicatorforeground=[("selected", theme["background"])]
+        )
+        self.style.configure("TCheckbutton", indicatorbackground=theme["button_background"],
+                             indicatorforeground=theme["text"])
+        self.style.configure("TScrollbar", background=theme["button_background"],
+                             troughcolor=theme["surface"], arrowcolor=theme["text"],
+                             bordercolor=theme["border"], lightcolor=theme["border"], darkcolor=theme["border"])
+        self.style.map("TScrollbar", background=[("active", theme["button_active_background"]),
+                                                ("pressed", theme["button_active_background"])])
+        self.style.configure("TEntry", fieldbackground=theme["input_background"],
+                             foreground=theme["text"], insertcolor=theme["text"])
+        self.style.map("TEntry", fieldbackground=[("readonly", theme["input_background"])])
         self.style.configure(
             "TNotebook",
             background=theme["background"],
@@ -1045,6 +1132,11 @@ class TypingTrainerApp(PlotMixin):
             ]
         )
 
+        for option, value in (("background", theme["surface"]), ("foreground", theme["text"]),
+                              ("selectBackground", theme["select_background"]),
+                              ("selectForeground", theme["select_foreground"])):
+            self.master.option_add(f"*TCombobox*Listbox.{option}", value)
+
         # Classic Tk widgets require manual configuration.
         for display in self.display_text_widgets.values():
             display.configure(
@@ -1085,26 +1177,15 @@ class TypingTrainerApp(PlotMixin):
             highlightcolor=theme["accent"],
             activestyle="none"
         )
+        if self.text_manager is not None and self.text_manager.window.winfo_exists():
+            self.text_manager.apply_theme(theme)
         self._apply_title_bar_colors(theme)
         self._schedule_title_bar_refresh()
         self._update_input_visibility()
         self._update_blind_target_indicator()
 
     def _detect_system_dark_mode(self) -> bool:
-        """
-        Return the OS default preference for app dark mode when available.
-        """
-        if sys.platform != "win32" or winreg is None:
-            return False
-        try:
-            with winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
-            ) as key:
-                value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
-                return int(value) == 0
-        except OSError:
-            return False
+        return system_prefers_dark()
 
 
     def _apply_title_bar_colors(self, theme: dict[str, str]) -> None:
@@ -1312,45 +1393,11 @@ class TypingTrainerApp(PlotMixin):
         self._apply_loaded_text()
 
 
-    def _format_target_text(self, lines: List[str]) -> str:
-        """
-        Wrap target text lines to the configured width without splitting words.
-        """
-        wrapper = textwrap.TextWrapper(
-            width=TARGET_TEXT_LINE_LENGTH,
-            expand_tabs=True,
-            replace_whitespace=False,
-            drop_whitespace=True,
-            break_long_words=False,
-            break_on_hyphens=False
-        )
-        formatted_lines: List[str] = []
-
-        for line in lines:
-            stripped_line = line.rstrip()
-            if stripped_line == "":
-                formatted_lines.append("")
-                continue
-
-            wrapped_line = wrapper.wrap(stripped_line)
-            if not wrapped_line:
-                formatted_lines.append("")
-                continue
-
-            formatted_lines.extend(part.rstrip() for part in wrapped_line)
-
-        return "\n".join(formatted_lines)
-
-
     def _apply_loaded_text(self) -> None:
         """
         Display the selected text and reset the typing session.
         """
-        normalized_lines = [
-            line.rstrip()
-            for line in self.selected_text.splitlines()
-        ]
-        self.target_text = self._format_target_text(normalized_lines)
+        self.target_text = self.selected_text
 
         self.display_text.configure(state="normal")
         self.display_text.delete("1.0", tk.END)
@@ -1359,8 +1406,7 @@ class TypingTrainerApp(PlotMixin):
         self._update_blind_target_indicator(0)
 
         self.info_text_var.set(
-            "Start typing in the input area. WPM starts with the "
-            "first key."
+            "Start typing. Enter is optional at automatic wraps; saved newlines require Enter."
         )
 
         self.reset_session(clear_display=False)
@@ -1390,6 +1436,8 @@ class TypingTrainerApp(PlotMixin):
 
         self.input_text.delete("1.0", tk.END)
         self.input_text.tag_remove("error", "1.0", tk.END)
+        self._soft_wrap_boundaries = set()
+        self._wraps_captured = False
 
         self.start_time = None
         self.finished = False
@@ -2626,10 +2674,53 @@ class TypingTrainerApp(PlotMixin):
         if self.start_time is None:
             if len(event.char) == 0:
                 return
+            self._capture_soft_wraps()
             self.start_time = time.time()
             self.schedule_periodic_update()
 
         self.update_typing_state()
+
+
+    def _capture_soft_wraps(self) -> None:
+        """Freeze the target's actual visual wrap points at the start of a run."""
+        if self._wraps_captured:
+            return
+        self.master.update_idletasks()
+        widget = self.display_text_widgets["typing"]
+        boundaries = set()
+        start = "1.0"
+        while widget.compare(start, "<", "end-1c"):
+            following = widget.index(f"{start} +1 display lines display linestart")
+            if widget.compare(following, "<=", start):
+                break
+            offset = len(widget.get("1.0", following))
+            if 0 < offset < len(self.target_text) and self.target_text[offset - 1] != "\n":
+                boundaries.add(offset)
+            start = following
+        self._soft_wrap_boundaries = boundaries
+        self._wraps_captured = True
+
+    def _read_typing_input(self) -> tuple[str, list[int]]:
+        raw = self.input_text.get("1.0", "end-1c")
+        return normalize_wrapped_input(self.target_text, raw, self._soft_wrap_boundaries)
+
+    def _on_typing_input_changed(self, event: tk.Event) -> None:
+        widget = event.widget
+        if not widget.edit_modified():
+            return
+        widget.edit_modified(False)
+        if (widget is not self.input_text or self._active_tab_key != "typing"
+                or self.is_letter_mode or self.is_special_mode or self.is_number_mode
+                or not self.target_text or self.finished):
+            return
+        if self.start_time is None:
+            if not widget.get("1.0", "end-1c"):
+                return
+            self._capture_soft_wraps()
+            self.start_time = time.time()
+            self.schedule_periodic_update()
+        else:
+            self.update_typing_state()
 
 
     def schedule_periodic_update(self) -> None:
@@ -2640,6 +2731,8 @@ class TypingTrainerApp(PlotMixin):
             return
 
         self.update_typing_state()
+        if self.finished:
+            return
         self.update_job_id = self.master.after(
             200,
             self.schedule_periodic_update,
@@ -2653,7 +2746,7 @@ class TypingTrainerApp(PlotMixin):
         if self.finished:
             return
 
-        typed_text = self.input_text.get("1.0", "end-1c")
+        typed_text, raw_offsets = self._read_typing_input()
         if self.is_blind_mode_active():
             self._update_blind_target_indicator(len(typed_text))
 
@@ -2661,7 +2754,7 @@ class TypingTrainerApp(PlotMixin):
         self._update_error_counter(self.previous_text, typed_text)
 
         # Then update current error highlighting and correct-count.
-        first_error_index = self.highlight_errors(typed_text)
+        first_error_index = self.highlight_errors(typed_text, raw_offsets)
 
         if (
             self.is_sudden_death_active()
@@ -2719,7 +2812,7 @@ class TypingTrainerApp(PlotMixin):
                 self.error_count += 1
 
 
-    def highlight_errors(self, typed_text: str) -> int | None:
+    def highlight_errors(self, typed_text: str, raw_offsets: list[int] | None = None) -> int | None:
         """
         Highlight incorrect characters in the input text.
 
@@ -2729,7 +2822,10 @@ class TypingTrainerApp(PlotMixin):
         the current number of correct characters.
         """
         self.input_text.tag_remove("error", "1.0", tk.END)
-        show_error_tags = not self.is_blind_mode_active()
+        show_error_tags = not self.is_blind_mode_active() or self.blind_reveal_active
+
+        if raw_offsets is None:
+            raw_offsets = list(range(len(typed_text)))
 
         correct = 0
         first_error_index: int | None = None
@@ -2737,8 +2833,8 @@ class TypingTrainerApp(PlotMixin):
         for index, char in enumerate(typed_text):
             if index >= len(self.target_text):
                 if show_error_tags:
-                    start = f"1.0 + {index} chars"
-                    end = f"1.0 + {index + 1} chars"
+                    start = f"1.0 + {raw_offsets[index]} chars"
+                    end = f"1.0 + {raw_offsets[index] + 1} chars"
                     self.input_text.tag_add("error", start, end)
                 if first_error_index is None:
                     first_error_index = index
@@ -2746,8 +2842,8 @@ class TypingTrainerApp(PlotMixin):
 
             if char != self.target_text[index]:
                 if show_error_tags:
-                    start = f"1.0 + {index} chars"
-                    end = f"1.0 + {index + 1} chars"
+                    start = f"1.0 + {raw_offsets[index]} chars"
+                    end = f"1.0 + {raw_offsets[index] + 1} chars"
                     self.input_text.tag_add("error", start, end)
                 if first_error_index is None:
                     first_error_index = index
@@ -2771,7 +2867,7 @@ class TypingTrainerApp(PlotMixin):
             self.master.after_cancel(self.update_job_id)
             self.update_job_id = None
 
-        typed_text = self.input_text.get("1.0", "end-1c")
+        typed_text = self._read_typing_input()[0]
         safe_index = max(0, min(failure_index, len(self.target_text)))
         elapsed_seconds = 0.0
         wpm = 0.0
@@ -2988,7 +3084,7 @@ class TypingTrainerApp(PlotMixin):
         If there is no valid timing or no text has been typed, a message is
         displayed informing the user.
         """
-        typed_text = self.input_text.get("1.0", "end-1c").strip()
+        typed_text = self._read_typing_input()[0].strip()
         words = len(typed_text.split())
 
         if self.start_time is None or words == 0:

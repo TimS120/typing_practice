@@ -44,6 +44,7 @@ from .io_utils import (
     SUDDEN_DEATH_TYPING_STATS_FILE_NAME,
     TRAINING_FLAG_COLUMN,
     ensure_stats_file_header,
+    open_encrypted_stats,
 )
 
 
@@ -408,7 +409,7 @@ class PlotMixin:
         correct_counts: List[float] = []
         daily_stats: dict = {}
 
-        with file_path.open("r", encoding="utf-8") as file:
+        with open_encrypted_stats(file_path, "r") as file:
             for line in file:
                 parts = line.strip().split(";")
                 if len(parts) < 6:
@@ -697,7 +698,7 @@ class PlotMixin:
         error_for_3d: List[float] = []
         daily_stats: dict = {}
 
-        with file_path.open("r", encoding="utf-8") as file:
+        with open_encrypted_stats(file_path, "r") as file:
             for line in file:
                 line = line.strip()
                 if not line:
@@ -1015,7 +1016,7 @@ class PlotMixin:
         error_for_3d: List[float] = []
         daily_stats: dict = {}
 
-        with self.stats_file_path.open("r", encoding="utf-8") as stats_file:
+        with open_encrypted_stats(self.stats_file_path, "r") as stats_file:
             for line in stats_file:
                 line = line.strip()
                 if not line:
@@ -1323,7 +1324,7 @@ class PlotMixin:
         error_rates: List[float] = []
         daily_stats: dict = {}
 
-        with self.letter_stats_file_path.open("r", encoding="utf-8") as file:
+        with open_encrypted_stats(self.letter_stats_file_path, "r") as file:
             for line in file:
                 parts = line.strip().split(";")
                 if len(parts) < 3:
@@ -1613,7 +1614,7 @@ class PlotMixin:
         error_rates: List[float] = []
         daily_stats: dict = {}
 
-        with self.special_stats_file_path.open("r", encoding="utf-8") as file:
+        with open_encrypted_stats(self.special_stats_file_path, "r") as file:
             for line in file:
                 parts = line.strip().split(";")
                 if len(parts) < 3:
@@ -1903,7 +1904,7 @@ class PlotMixin:
         error_rates: List[float] = []
         daily_stats: dict = {}
 
-        with self.number_stats_file_path.open("r", encoding="utf-8") as file:
+        with open_encrypted_stats(self.number_stats_file_path, "r") as file:
             for line in file:
                 parts = line.strip().split(";")
                 if len(parts) < 3:
@@ -2277,7 +2278,7 @@ class PlotMixin:
                 header,
                 create_if_missing=False
             )
-            with path.open("r", encoding="utf-8") as file:
+            with open_encrypted_stats(path, "r") as file:
                 for line in file:
                     line = line.strip()
                     if not line or line == header:

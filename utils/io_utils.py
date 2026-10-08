@@ -5,11 +5,16 @@ Utility helpers for accessing and maintaining typing trainer data files.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List
+from contextlib import contextmanager
+import io
+import json
+import os
+import re
+import tempfile
 
-DATA_DIR_NAME = "data"
+from cryptography.fernet import Fernet, InvalidToken
 
-TEXT_FILE_NAME = "typing_texts.txt"
+TEXT_FILE_NAME = "texts.json"
 STATS_FILE_NAME = "typing_stats.csv"
 LETTER_STATS_FILE_NAME = "letter_stats.csv"
 SPECIAL_STATS_FILE_NAME = "special_character_stats.csv"
@@ -73,124 +78,145 @@ BLIND_NUMBER_STATS_FILE_HEADER = (
 )
 
 
-def _get_project_root() -> Path:
-    """
-    Return the project root folder that contains the utils package.
-    """
-    try:
-        return Path(__file__).resolve().parents[1]
-    except NameError:
-        return Path.cwd()
+class DataError(ValueError):
+    """Stored user data could not be read safely."""
 
 
 def get_data_dir() -> Path:
-    """
-    Return the folder that contains the data files, creating it if necessary.
-    """
-    data_dir = _get_project_root() / DATA_DIR_NAME
-    data_dir.mkdir(parents=True, exist_ok=True)
-    return data_dir
+    """Keep user data beside the application in the Git-ignored data folder."""
+    directory = Path(__file__).resolve().parents[1] / "data"
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return directory
 
 
 def get__file_path(file_path: str) -> Path:
-    """
-    Return a path to a file within the managed data directory.
-    """
-    return get_data_dir() / file_path
+    return get_data_dir() / (file_path + ".enc")
 
 
-def default_texts() -> List[str]:
-    """
-    Return a list of default training texts.
-
-    These texts are written to the storage file on first run so that the user
-    can start training immediately. Texts may contain multiple lines, but here
-    all defaults are single line texts.
-    """
-    return [
-        "The quick brown fox jumps over the lazy dog.",
-        "Typing practice helps to increase speed and accuracy.",
-        "Python is a powerful and readable programming language.",
-        "Consistent practice is the key to becoming a faster typist.",
-        "Robots can move precisely if their controllers are well designed."
-    ]
+def _atomic_write(path: Path, data: bytes) -> None:
+    """Replace a file atomically, without plaintext temporary data."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, temporary = tempfile.mkstemp(prefix=".pending-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
-def _parse_multiline_texts(raw: str) -> List[str]:
-    """
-    Parse the raw content of the text file into a list of texts.
-
-    Consecutive non empty lines form one text. Empty lines separate texts.
-    Trailing spaces at the end of lines are removed.
-    """
-    texts: List[str] = []
-    current_lines: List[str] = []
-
-    for line in raw.splitlines():
-        if line.strip() == "":
-            if current_lines:
-                joined = "\n".join(current_lines).rstrip("\n")
-                texts.append(joined)
-                current_lines = []
+def _cipher(directory: Path) -> Fernet:
+    key_path = directory / "storage.key"
+    if not key_path.exists():
+        if any(directory.glob("*.enc")):
+            raise DataError("The encryption key is missing. Restore storage.key with your data backup.")
+        try:
+            fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            pass
         else:
-            current_lines.append(line.rstrip())
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(Fernet.generate_key())
+    try:
+        return Fernet(key_path.read_bytes())
+    except ValueError as error:
+        raise DataError("The local encryption key is invalid.") from error
 
-    if current_lines:
-        joined = "\n".join(current_lines).rstrip("\n")
-        texts.append(joined)
 
-    return texts
+def read_encrypted(path: Path) -> str:
+    cipher = _cipher(path.parent)
+    try:
+        payload = json.loads(cipher.decrypt(path.read_bytes()))
+        if payload["file"] != path.name or not isinstance(payload["content"], str):
+            raise ValueError("Invalid payload")
+        return payload["content"]
+    except (InvalidToken, ValueError, KeyError, TypeError) as error:
+        raise DataError(f"Cannot read {path.name}: data or its encryption key was modified.") from error
 
 
-def load_or_create_texts(path: Path) -> List[str]:
-    """
-    Load training texts from the given file, creating it with defaults if needed.
+def write_encrypted(path: Path, content: str) -> None:
+    payload = json.dumps({"file": path.name, "content": content}, ensure_ascii=False).encode("utf-8")
+    _atomic_write(path, _cipher(path.parent).encrypt(payload))
 
-    Each text is a block of non empty lines. Empty lines separate texts.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
+
+@contextmanager
+def open_encrypted_stats(path: Path, mode: str = "r"):
+    """Expose CSV only in memory; all statistics on disk stay authenticated/encrypted."""
+    content = read_encrypted(path) if path.exists() else ""
+    if mode == "r" and not path.exists():
+        raise FileNotFoundError(path)
+    stream = io.StringIO(content)
+    if mode == "a":
+        stream.seek(0, io.SEEK_END)
+    try:
+        yield stream
+        if mode == "a":
+            write_encrypted(path, stream.getvalue())
+    finally:
+        stream.close()
+
+
+def validate_texts(entries: list[dict[str, str]]) -> None:
+    if not isinstance(entries, list):
+        raise ValueError("The text library must be a list.")
+    for entry in entries:
+        if (not isinstance(entry, dict) or set(entry) != {"name", "text"}
+                or not isinstance(entry["name"], str) or not entry["name"].strip()
+                or not isinstance(entry["text"], str) or not entry["text"]):
+            raise ValueError("Every text needs a name and non-empty content.")
+
+
+def load_or_create_texts(path: Path) -> list[dict[str, str]]:
     if not path.exists():
-        lines = default_texts()
-        content = "\n\n".join(lines)
-        path.write_text(content, encoding="utf-8")
-        return lines
-
-    raw = path.read_text(encoding="utf-8")
-    texts = _parse_multiline_texts(raw)
-
-    if not texts:
-        texts = default_texts()
-        content = "\n\n".join(texts)
-        path.write_text(content, encoding="utf-8")
-
-    return texts
+        save_texts(path, [])
+        return []
+    try:
+        entries = json.loads(read_encrypted(path))
+        validate_texts(entries)
+        return entries
+    except DataError:
+        raise
+    except (ValueError, TypeError) as error:
+        raise DataError("Cannot read the text library. Restore a valid backup.") from error
 
 
-def ensure_stats_file_header(
-    path: Path,
-    header: str,
-    create_if_missing: bool = True
-) -> None:
-    """
-    Make sure the statistics file exists and starts with the given header line.
+def save_texts(path: Path, entries: list[dict[str, str]]) -> None:
+    validate_texts(entries)
+    write_encrypted(path, json.dumps(entries, ensure_ascii=False))
 
-    If the file is missing and creation is allowed, the header line is written.
-    When the file already exists but lacks the requested header, the header is
-    inserted as the first line while preserving the existing data.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
 
+def ensure_stats_file_header(path: Path, header: str, create_if_missing: bool = True) -> None:
     if not path.exists():
         if create_if_missing:
-            path.write_text(f"{header}\n", encoding="utf-8")
+            write_encrypted(path, header + "\n")
         return
+    content = read_encrypted(path)
+    if content.splitlines()[:1] != [header]:
+        write_encrypted(path, header + "\n" + content)
 
-    with path.open("r+", encoding="utf-8") as file:
-        first_line = file.readline().strip()
-        if first_line == header:
-            return
-        file.seek(0)
-        existing_content = file.read()
-        file.seek(0)
-        file.write(f"{header}\n")
-        file.write(existing_content)
+
+def load_settings() -> dict:
+    path = get_data_dir() / "settings.json"
+    try:
+        settings = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(settings, dict):
+        return {}
+    result = {}
+    if settings.get("theme") in ("system", "light", "dark"):
+        result["theme"] = settings["theme"]
+    size = settings.get("font_size")
+    if type(size) is int and 6 <= size <= 48:
+        result["font_size"] = size
+    dimensions = settings.get("window_size")
+    if isinstance(dimensions, str) and re.fullmatch(r"[1-9]\d{0,4}x[1-9]\d{0,4}", dimensions):
+        result["window_size"] = dimensions
+    return result
+
+
+def save_settings(settings: dict) -> None:
+    _atomic_write(get_data_dir() / "settings.json", json.dumps(settings, indent=2).encode("utf-8"))

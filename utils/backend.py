@@ -21,6 +21,7 @@ from .io_utils import (
     SUDDEN_DEATH_SPECIAL_STATS_FILE_HEADER,
     SUDDEN_DEATH_TYPING_STATS_FILE_HEADER,
     ensure_stats_file_header,
+    open_encrypted_stats,
 )
 
 
@@ -74,7 +75,7 @@ def save_wpm_result(
         f"{duration_seconds:.3f};{training_flag}\n"
     )
     ensure_stats_file_header(file_path, STATS_FILE_HEADER)
-    with file_path.open("a", encoding="utf-8") as stats_file:
+    with open_encrypted_stats(file_path, "a") as stats_file:
         stats_file.write(line)
 
 
@@ -97,7 +98,7 @@ def save_sudden_death_wpm_result(
         f"{duration_seconds:.3f};{completed_flag};{training_flag}\n"
     )
     ensure_stats_file_header(file_path, SUDDEN_DEATH_TYPING_STATS_FILE_HEADER)
-    with file_path.open("a", encoding="utf-8") as stats_file:
+    with open_encrypted_stats(file_path, "a") as stats_file:
         stats_file.write(line)
 
 
@@ -118,7 +119,7 @@ def save_letter_result(
         f"{duration_seconds:.3f};{training_flag}\n"
     )
     ensure_stats_file_header(file_path, LETTER_STATS_FILE_HEADER)
-    with file_path.open("a", encoding="utf-8") as stats_file:
+    with open_encrypted_stats(file_path, "a") as stats_file:
         stats_file.write(line)
 
 
@@ -141,7 +142,7 @@ def save_sudden_death_letter_result(
         f"{duration_seconds:.3f};{completed_flag};{training_flag}\n"
     )
     ensure_stats_file_header(file_path, SUDDEN_DEATH_LETTER_STATS_FILE_HEADER)
-    with file_path.open("a", encoding="utf-8") as stats_file:
+    with open_encrypted_stats(file_path, "a") as stats_file:
         stats_file.write(line)
 
 
@@ -162,7 +163,7 @@ def save_special_result(
         f"{duration_seconds:.3f};{training_flag}\n"
     )
     ensure_stats_file_header(file_path, SPECIAL_STATS_FILE_HEADER)
-    with file_path.open("a", encoding="utf-8") as stats_file:
+    with open_encrypted_stats(file_path, "a") as stats_file:
         stats_file.write(line)
 
 
@@ -185,7 +186,7 @@ def save_sudden_death_special_result(
         f"{duration_seconds:.3f};{completed_flag};{training_flag}\n"
     )
     ensure_stats_file_header(file_path, SUDDEN_DEATH_SPECIAL_STATS_FILE_HEADER)
-    with file_path.open("a", encoding="utf-8") as stats_file:
+    with open_encrypted_stats(file_path, "a") as stats_file:
         stats_file.write(line)
 
 
@@ -206,7 +207,7 @@ def save_number_result(
         f"{duration_seconds:.3f};{training_flag}\n"
     )
     ensure_stats_file_header(file_path, NUMBER_STATS_FILE_HEADER)
-    with file_path.open("a", encoding="utf-8") as stats_file:
+    with open_encrypted_stats(file_path, "a") as stats_file:
         stats_file.write(line)
 
 
@@ -229,7 +230,7 @@ def save_sudden_death_number_result(
         f"{duration_seconds:.3f};{completed_flag};{training_flag}\n"
     )
     ensure_stats_file_header(file_path, SUDDEN_DEATH_NUMBER_STATS_FILE_HEADER)
-    with file_path.open("a", encoding="utf-8") as stats_file:
+    with open_encrypted_stats(file_path, "a") as stats_file:
         stats_file.write(line)
 
 
@@ -253,7 +254,7 @@ def save_blind_typing_result(
         f"{completed_flag};{end_error_percentage:.3f};{training_flag}\n"
     )
     ensure_stats_file_header(file_path, BLIND_TYPING_STATS_FILE_HEADER)
-    with file_path.open("a", encoding="utf-8") as stats_file:
+    with open_encrypted_stats(file_path, "a") as stats_file:
         stats_file.write(line)
 
 
@@ -278,7 +279,7 @@ def save_blind_letter_result(
         f"{end_error_percentage:.3f};{training_flag}\n"
     )
     ensure_stats_file_header(file_path, BLIND_LETTER_STATS_FILE_HEADER)
-    with file_path.open("a", encoding="utf-8") as stats_file:
+    with open_encrypted_stats(file_path, "a") as stats_file:
         stats_file.write(line)
 
 
@@ -303,7 +304,7 @@ def save_blind_special_result(
         f"{end_error_percentage:.3f};{training_flag}\n"
     )
     ensure_stats_file_header(file_path, BLIND_SPECIAL_STATS_FILE_HEADER)
-    with file_path.open("a", encoding="utf-8") as stats_file:
+    with open_encrypted_stats(file_path, "a") as stats_file:
         stats_file.write(line)
 
 
@@ -328,5 +329,5 @@ def save_blind_number_result(
         f"{end_error_percentage:.3f};{training_flag}\n"
     )
     ensure_stats_file_header(file_path, BLIND_NUMBER_STATS_FILE_HEADER)
-    with file_path.open("a", encoding="utf-8") as stats_file:
+    with open_encrypted_stats(file_path, "a") as stats_file:
         stats_file.write(line)

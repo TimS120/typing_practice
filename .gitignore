@@ -208,3 +208,9 @@ __marimo__/
 
 # Typing trainer runtime data
 data/
+
+# All user data, including legacy local data and encryption keys
+*.enc
+storage.key
+settings.json
+.pending-*
