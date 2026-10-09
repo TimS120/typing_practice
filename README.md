@@ -43,6 +43,19 @@ Happy typing! Track your streaks, experiment with sudden-death challenges, and i
    2. Write the displayed character up to the 100th letter - the mode is then finished
 5. Open **Statistics** to choose a chart mode and filter training/benchmark/all runs. Open a mode-specific chart or the Overview for trends across all modes. These chart controls are independent of practice controls; the page scrolls when needed.
 
+## Mistake analysis
+Open **Statistics → Mistake analysis** for the history report. It records text practice and all three helper drills in Standard, Blind and Sudden death modes. Completed runs and sudden-death failures contribute; Reset, switching exercises and closing the app discard unfinished analysis. Pasted or bulk-inserted input is excluded from analysis, while existing speed/accuracy statistics keep their normal behavior. Older statistics cannot be reconstructed into detailed mistake reports.
+
+After finishing a run, **Mistakes current session** in the Typing tab opens a themed report for that exact session. It shows the session's practice mode, layout, language and training/benchmark status without settings or filters. Its tables and observations use only that session, regardless of history filters or the history minimum-opportunity setting. The short first-attempt mistake count and Shift technique error count appear beside the time/WPM/error counters. Starting or resetting a session clears this report and disables the button until another run finishes. The Statistics history report remains available independently.
+
+Choose the history range (7, 30 or 90 days, or all history), practice type, mode, training/benchmark runs, keyboard layout and language. The history range and minimum opportunities are saved. The default minimum is 30 target occurrences: smaller samples remain visible but do not establish ranked weaknesses. The summary highlights up to three findings; sortable tables show character/category error rates, directional confusions, error types, Shift technique and corrections, transition timing, and daily progress.
+
+- **First-attempt error rate** counts a target position once, even after several retries. Total mistakes also retain corrected errors. Confusion counts can exceed the number of targets after retries, so their normalized column shows mistakes per 100 targets.
+- **Error types** distinguish missing/unwanted capitalization, substitutions, shifted-symbol confusions, missing/extra characters, repeats and transposed pairs. Text alignment estimates omissions and swaps from the input sequence; ambiguous edits may have more than one interpretation. A transposed pair is one event affecting two positions.
+- **Shift technique** records left/right Shift and compares it with the conventional opposite-hand rule for German QWERTZ, US QWERTY and UK QWERTY. Same-hand Shift is a technique error and does not change accuracy or end sudden-death runs. Caps Lock, both Shift keys and unavailable modifier information are reported separately. Custom sets and unmapped/composed characters do not have a physical key map, so the app does not infer a Shift side for them.
+- **Corrections and timing** include corrected/remaining mistakes, Backspace presses, deleted characters, recovery time and average intervals between correctly typed adjacent characters. Gaps longer than five seconds are excluded from character/transition timing.
+- **Storage** uses encrypted `data/mistake_analysis.jsonl.enc`. Only aggregate counts and timing are saved, along with mode/layout/language metadata; passages and raw keystroke histories are discarded. Generated texts remain temporary.
+
 
 ## Training Modes
 - **Typing (default)**: Full text practice from your encrypted, ordered text library. Add your first text in **Text management**.

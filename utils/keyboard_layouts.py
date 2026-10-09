@@ -33,3 +33,34 @@ def character_coverage(entries, characters, threshold):
 def character_label(char):
     labels = {" ": "Space", "\t": "Tab", "\n": "Enter / newline"}
     return labels.get(char, char if char.isprintable() else unicodedata.name(char, "Control"))
+
+
+def character_key(char, layout):
+    """Return (base key, typing hand, Shift required) for conventional layouts.
+
+    Custom repertoires have no physical mapping. AltGr-only and composed
+    characters are intentionally not assigned a Shift technique.
+    """
+    if layout not in LAYOUTS:
+        return None
+    lower = char.lower()
+    left = "qwertasdfgzxcvb" if layout != "German QWERTZ" else "qwertasdfgyxcvb"
+    right = "yuiophjklnm" if layout != "German QWERTZ" else "zuiophjklnmäöü"
+    if len(lower) == 1 and lower in left + right:
+        return lower, "left" if lower in left else "right", char.isupper()
+    digits = "1234567890"
+    shifted = '!@#$%^&*()' if layout == "US QWERTY" else '!"£$%^&*()' if layout == "UK QWERTY" else '!"§$%&/()='
+    pairs = list(zip(digits, shifted, ["left"] * 5 + ["right"] * 5))
+    if layout == "German QWERTZ":
+        pairs += [("ß", "?", "right"), ("+", "*", "right"), ("#", "'", "right"),
+                  (",", ";", "right"), (".", ":", "right"), ("-", "_", "right"),
+                  ("<", ">", "left"), ("^", "°", "left")]
+    else:
+        pairs += [("-", "_", "right"), ("=", "+", "right"), ("[", "{", "right"),
+                  ("]", "}", "right"), (";", ":", "right"), (",", "<", "right"),
+                  (".", ">", "right"), ("/", "?", "right")]
+        pairs += [("'", '@', "right"), ("#", "~", "right"), ("`", "¬", "left"), ("\\", "|", "left")] if layout == "UK QWERTY" else [("'", '"', "right"), ("`", "~", "left"), ("\\", "|", "right")]
+    for base, upper, hand in pairs:
+        if char in (base, upper):
+            return base, hand, char == upper
+    return None

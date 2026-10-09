@@ -228,6 +228,13 @@ def load_settings() -> dict:
     language = settings.get("generation_language")
     if language in TEXT_LANGUAGES:
         result["generation_language"] = language
+    from .mistake_analysis import HISTORY_RANGES
+    history = settings.get("analysis_history")
+    if history in HISTORY_RANGES:
+        result["analysis_history"] = history
+    minimum = settings.get("analysis_minimum")
+    if type(minimum) is int and minimum >= 1:
+        result["analysis_minimum"] = minimum
     from .keyboard_layouts import LAYOUTS
     layout = settings.get("keyboard_layout")
     if layout in (*LAYOUTS, "Custom"):

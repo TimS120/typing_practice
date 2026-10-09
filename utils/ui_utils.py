@@ -23,6 +23,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from .system_theme import system_prefers_dark
 from .text_manager import TextManager
+from .analysis_view import AnalysisView
+from .mistake_analysis import MistakeRecorder, save_analysis
 from .text_generation import GenerationError, generate_passage
 from .typing_input import normalize_wrapped_input
 from .keyboard_layouts import LAYOUTS, DEFAULT_LAYOUT, layout_characters, drill_characters
@@ -220,6 +222,16 @@ class TypingTrainerApp(PlotMixin):
         self._generation_pending = False
         self._generation_job = None
         self._generation_messages = queue.Queue()
+        self.analysis_history = self.settings.get("analysis_history", "Last 30 days")
+        self.analysis_minimum = self.settings.get("analysis_minimum", 30)
+        self._analysis = None
+        self._current_session_analysis = None
+        self.session_analysis_window = None
+        self.session_analysis_view = None
+        self._analysis_bulk_pending = False
+        self._analysis_event = None
+        self._analysis_shift = set()
+        self._loaded_typing_language = ""
         self.text_manager = None
         self._loaded_typing_text = ""
         self._helper_kind = None
@@ -443,7 +455,13 @@ class TypingTrainerApp(PlotMixin):
         self.info_label.grid(row=0, column=0, sticky="w")
         self.wpm_label = ttk.Label(status, textvariable=self.stats_summary_var)
         self.wpm_label.grid(row=1, column=0, sticky="w", pady=(3, 0))
-        status.bind("<Configure>", lambda event: self.info_label.configure(wraplength=max(180, event.width)))
+        self.session_mistakes_button = ttk.Button(status, text="Mistakes current session",
+            command=self.show_current_session_mistakes, state="disabled")
+        self.session_mistakes_button.grid(row=1, column=1, padx=(8, 0))
+        def resize_status(event):
+            self.info_label.configure(wraplength=max(180, event.width))
+            self.wpm_label.configure(wraplength=max(180, event.width - self.session_mistakes_button.winfo_reqwidth() - 12))
+        status.bind("<Configure>", resize_status)
 
         self._build_statistics_page()
         self._active_tab_key = "typing"
@@ -580,6 +598,7 @@ class TypingTrainerApp(PlotMixin):
                 messagebox.showerror("Cannot generate text", value, parent=self.master)
                 continue
             self._generated_text = True
+            self._loaded_typing_language = self.generation_language_var.get()
             self.text_listbox.selection_clear(0, tk.END)
             self.selected_text = value
             self._loaded_typing_text = value
@@ -614,6 +633,7 @@ class TypingTrainerApp(PlotMixin):
             messagebox.showinfo("Keyboard layout", f"The selected layout has no characters for the {kind} drill.", parent=self.master)
             return False
         self._drill_characters = characters
+        self._drill_layout = self.keyboard_layout_var.get()
         return True
 
     def _update_settings_labels(self):
@@ -646,13 +666,26 @@ class TypingTrainerApp(PlotMixin):
         input_scroll.grid(row=3, column=1, sticky="ns")
         typed.configure(yscrollcommand=input_scroll.set)
         typed.bind("<Key>", self.on_key_press)
+        typed.bind("<KeyRelease>", self._analysis_key_release)
+        typed.bind("<FocusOut>", self._analysis_focus_lost)
+        typed.bind("<<Paste>>", self._analysis_bulk_edit, add="+")
+        typed.bind("<<PasteSelection>>", self._analysis_bulk_edit, add="+")
         if key == "typing":
             typed.bind("<<Modified>>", self._on_typing_input_changed)
         self.display_text_widgets[key] = target
         self.input_text_widgets[key] = typed
 
     def _build_statistics_page(self):
-        viewport = self.statistics_page
+        self.statistics_page.columnconfigure(0, weight=1)
+        self.statistics_page.rowconfigure(0, weight=1)
+        self.statistics_tabs = ttk.Notebook(self.statistics_page)
+        self.statistics_tabs.grid(row=0, column=0, sticky="nsew")
+        viewport = ttk.Frame(self.statistics_tabs)
+        self.analysis_page = ttk.Frame(self.statistics_tabs)
+        self.statistics_tabs.add(viewport, text="Charts")
+        self.statistics_tabs.add(self.analysis_page, text="Mistake analysis")
+        self.analysis_view = AnalysisView(self, self.analysis_page)
+        self.statistics_tabs.bind("<<NotebookTabChanged>>", self._on_analysis_tab)
         viewport.columnconfigure(0, weight=1)
         viewport.rowconfigure(0, weight=1)
         self.stats_canvas = tk.Canvas(viewport, highlightthickness=0)
@@ -730,6 +763,39 @@ class TypingTrainerApp(PlotMixin):
     def _on_main_tab_changed(self, event=None):
         if self.app_tabs.select() == str(self.text_management_page) and self.text_manager is None:
             self.text_manager = TextManager(self, parent=self.text_management_page)
+
+    def _on_analysis_tab(self, event=None):
+        if self.statistics_tabs.select() == str(self.analysis_page):
+            self.analysis_view.refresh(save=False)
+
+    def show_mistake_analysis(self):
+        self.app_tabs.select(self.statistics_page)
+        self.statistics_tabs.select(self.analysis_page)
+        self.analysis_view.refresh(save=False)
+
+    def _close_session_analysis(self):
+        if self.session_analysis_window is not None:
+            self.session_analysis_window.destroy()
+        self.session_analysis_window = None
+        self.session_analysis_view = None
+
+    def show_current_session_mistakes(self):
+        if self._current_session_analysis is None:
+            return
+        if self.session_analysis_window is not None:
+            self.session_analysis_window.lift()
+            return
+        self.session_analysis_window = tk.Toplevel(self.master)
+        self.session_analysis_window.title("Mistakes — current session")
+        self.session_analysis_window.geometry("1100x650")
+        self.session_analysis_window.minsize(650, 400)
+        self.session_analysis_window.transient(self.master)
+        self.session_analysis_window.protocol("WM_DELETE_WINDOW", self._close_session_analysis)
+        self.session_analysis_view = AnalysisView(self, self.session_analysis_window,
+            session_record=self._current_session_analysis)
+        theme = DARK_THEME if self.dark_mode_enabled else LIGHT_THEME
+        self.session_analysis_window.configure(bg=theme["background"])
+        self._set_native_title_bar_theme(self.session_analysis_window, self.dark_mode_enabled, theme)
 
     def _get_plot_mode_key(self):
         return SUDDEN_DEATH_MODE_KEY_BY_LABEL.get(self.stats_mode_var.get(), "standard")
@@ -923,6 +989,8 @@ class TypingTrainerApp(PlotMixin):
                        "custom_characters": self.custom_characters,
                        "coverage_threshold": self.coverage_threshold,
                        "generation_language": self.generation_language_var.get(),
+                       "analysis_history": self.analysis_history,
+                       "analysis_minimum": self.analysis_minimum,
                        "window_size": f"{self.master.winfo_width()}x{self.master.winfo_height()}"})
 
     def close(self) -> None:
@@ -1310,6 +1378,9 @@ class TypingTrainerApp(PlotMixin):
         )
         if self.text_manager is not None and self.text_manager.window.winfo_exists():
             self.text_manager.apply_theme(theme)
+        if self.session_analysis_window is not None:
+            self.session_analysis_window.configure(bg=theme["background"])
+            self._set_native_title_bar_theme(self.session_analysis_window, self.dark_mode_enabled, theme)
         self._apply_title_bar_colors(theme)
         self._schedule_title_bar_refresh()
         self._update_input_visibility()
@@ -1525,6 +1596,7 @@ class TypingTrainerApp(PlotMixin):
         self._generated_text = False
         self.app_tabs.select(self.practice_page)
         self._choose_practice("typing")
+        self._loaded_typing_language = self.text_entries[index].get("language", "")
         self.selected_text = self.texts[index]
         self._loaded_typing_text = self.selected_text
 
@@ -1566,6 +1638,14 @@ class TypingTrainerApp(PlotMixin):
         :param exit_number_mode: Whether number mode should be deactivated
         :param exit_special_mode: Whether special mode should be deactivated
         """
+        # Unfinished recordings never reach persistent history.
+        self._analysis = None
+        self._current_session_analysis = None
+        self.session_mistakes_button.configure(state="disabled")
+        self._close_session_analysis()
+        self._analysis_bulk_pending = False
+        self._analysis_event = None
+        self._analysis_shift.clear()
         if clear_display:
             self.display_text.configure(state="normal")
             self.display_text.delete("1.0", tk.END)
@@ -1746,6 +1826,9 @@ class TypingTrainerApp(PlotMixin):
             return
 
         if len(typed_text) > 1:
+            self._analysis_bulk_pending = True
+            if self._analysis is not None:
+                self._analysis.excluded = True
             typed_text = typed_text[-1]
             self.input_text.delete("1.0", tk.END)
             self.input_text.insert("1.0", typed_text)
@@ -1753,6 +1836,7 @@ class TypingTrainerApp(PlotMixin):
         current_char = typed_text
         target_letter = self.letter_sequence[self.letter_index]
 
+        self._analysis_attempt("letter", self.letter_sequence, self.letter_index, current_char)
         is_correct = current_char == target_letter
         advance_on_error = self.is_blind_mode_active()
 
@@ -1803,6 +1887,8 @@ class TypingTrainerApp(PlotMixin):
         if self.letter_index <= 0 or not self.letter_input_history:
             return False
 
+        if self._analysis is not None:
+            self._analysis.undo(self.letter_index - 1)
         self.letter_index -= 1
         last_char = self.letter_input_history.pop()
         target_letter = (
@@ -1905,6 +1991,7 @@ class TypingTrainerApp(PlotMixin):
             if elapsed_minutes > 0.0:
                 letters_per_minute = self.letter_correct_letters / elapsed_minutes
 
+        analysis_target = "".join(self.letter_sequence)
         completed_sequence = self.letter_index >= self.letter_total_letters
         typed_letters_text = "".join(self.letter_input_history)
         typed_letters_count = len(typed_letters_text)
@@ -2043,6 +2130,7 @@ class TypingTrainerApp(PlotMixin):
                 end_error_percentage=blind_end_error_percentage,
                 is_training_run=self.training_run_var.get()
             )
+        self._finish_analysis(analysis_target, completed_sequence, sudden_death)
 
 
     def start_special_mode(self) -> None:
@@ -2129,6 +2217,9 @@ class TypingTrainerApp(PlotMixin):
             return
 
         if len(typed_text) > 1:
+            self._analysis_bulk_pending = True
+            if self._analysis is not None:
+                self._analysis.excluded = True
             typed_text = typed_text[-1]
             self.input_text.delete("1.0", tk.END)
             self.input_text.insert("1.0", typed_text)
@@ -2136,6 +2227,7 @@ class TypingTrainerApp(PlotMixin):
         current_char = typed_text
         target_symbol = self.special_sequence[self.special_index]
 
+        self._analysis_attempt("special", self.special_sequence, self.special_index, current_char)
         is_correct = current_char == target_symbol
         advance_on_error = self.is_blind_mode_active()
 
@@ -2186,6 +2278,8 @@ class TypingTrainerApp(PlotMixin):
         if self.special_index <= 0 or not self.special_input_history:
             return False
 
+        if self._analysis is not None:
+            self._analysis.undo(self.special_index - 1)
         self.special_index -= 1
         last_char = self.special_input_history.pop()
         target_symbol = (
@@ -2283,6 +2377,7 @@ class TypingTrainerApp(PlotMixin):
             if elapsed_minutes > 0.0:
                 symbols_per_minute = self.special_correct_chars / elapsed_minutes
 
+        analysis_target = "".join(self.special_sequence)
         completed_sequence = self.special_index >= self.special_total_chars
         typed_symbols_text = "".join(self.special_input_history)
         typed_symbols_count = len(typed_symbols_text)
@@ -2421,6 +2516,7 @@ class TypingTrainerApp(PlotMixin):
                 end_error_percentage=blind_end_error_percentage,
                 is_training_run=self.training_run_var.get()
             )
+        self._finish_analysis(analysis_target, completed_sequence, sudden_death)
 
 
     def start_number_mode(self) -> None:
@@ -2509,6 +2605,9 @@ class TypingTrainerApp(PlotMixin):
             return
 
         if len(typed_text) > 1:
+            self._analysis_bulk_pending = True
+            if self._analysis is not None:
+                self._analysis.excluded = True
             typed_text = typed_text[-1]
             self.input_text.delete("1.0", tk.END)
             self.input_text.insert("1.0", typed_text)
@@ -2516,6 +2615,7 @@ class TypingTrainerApp(PlotMixin):
         current_char = typed_text
         target_digit = self.number_sequence[self.number_index]
 
+        self._analysis_attempt("number", self.number_sequence, self.number_index, current_char)
         is_correct = current_char == target_digit
         advance_on_error = self.is_blind_mode_active()
 
@@ -2566,6 +2666,8 @@ class TypingTrainerApp(PlotMixin):
         if self.number_index <= 0 or not self.number_input_history:
             return False
 
+        if self._analysis is not None:
+            self._analysis.undo(self.number_index - 1)
         self.number_index -= 1
         last_char = self.number_input_history.pop()
         target_digit = (
@@ -2665,6 +2767,7 @@ class TypingTrainerApp(PlotMixin):
             if elapsed_minutes > 0.0:
                 digits_per_minute = self.number_correct_digits / elapsed_minutes
 
+        analysis_target = "".join(self.number_sequence)
         completed_sequence = self.number_index >= self.number_total_digits
         typed_digits_text = "".join(self.number_input_history)
         typed_digits_count = len(typed_digits_text)
@@ -2803,7 +2906,99 @@ class TypingTrainerApp(PlotMixin):
                 end_error_percentage=blind_end_error_percentage,
                 is_training_run=self.training_run_var.get()
             )
+        self._finish_analysis(analysis_target, completed_sequence, sudden_death)
 
+
+    def _new_analysis(self, mode, target):
+        layout = self._drill_layout if mode != "typing" else self.keyboard_layout_var.get()
+        language = self._loaded_typing_language if mode == "typing" else ("German" if layout == "German QWERTZ" else "English" if layout in ("US QWERTY", "UK QWERTY") else "")
+        self._analysis = MistakeRecorder(target, {"mode": mode, "variant": self._get_sudden_death_mode_key(),
+            "layout": layout, "language": language, "training": self.training_run_var.get(),
+            "source": "generated" if self._generated_text and mode == "typing" else "library" if mode == "typing" else "drill"})
+        self._analysis.excluded = self._analysis_bulk_pending
+        return self._analysis
+
+    def _analysis_key_press(self, event):
+        keysym = getattr(event, "keysym", "")
+        if keysym in ("Shift_L", "Shift_R"):
+            self._analysis_shift.add("left" if keysym == "Shift_L" else "right")
+            return
+        if keysym == "BackSpace" and self._analysis is not None:
+            self._analysis.backspace()
+        char = getattr(event, "char", "")
+        if len(char) != 1 or (not char.isprintable() and keysym not in ("Return", "Tab")):
+            self._analysis_event = None
+            return
+        state = getattr(event, "state", 0)
+        if state & 1:
+            side = next(iter(self._analysis_shift)) if len(self._analysis_shift) == 1 else "both" if len(self._analysis_shift) == 2 else "unknown"
+        else:
+            self._analysis_shift.clear()
+            side = "none"
+        self._analysis_event = ("\n" if keysym == "Return" else char, {"shift": side, "caps": bool(state & 2)})
+
+    def _analysis_key_release(self, event):
+        if event.keysym in ("Shift_L", "Shift_R"):
+            self._analysis_shift.discard("left" if event.keysym == "Shift_L" else "right")
+
+    def _analysis_focus_lost(self, event=None):
+        self._analysis_shift.clear()
+        self._analysis_event = None
+
+    def _analysis_bulk_edit(self, event=None):
+        self._analysis_bulk_pending = True
+        if self._analysis is None and self.target_text and self._active_tab_key == "typing":
+            self._new_analysis("typing", self.target_text)
+        if self._analysis is not None:
+            self._analysis.excluded = True
+
+    def _analysis_observe(self, text):
+        if not text and self._analysis is None:
+            return
+        recorder = self._analysis or self._new_analysis("typing", self.target_text)
+        if text == recorder.text:
+            return
+        from difflib import SequenceMatcher
+        changes = [text[c:d] for op, a, b, c, d in SequenceMatcher(None, recorder.text, text, autojunk=False).get_opcodes() if op != "equal" and d > c]
+        if any(len(change) > 1 for change in changes):
+            recorder.excluded = True
+        event = self._analysis_event
+        modifiers = event[1] if event and len(changes) == 1 and changes[0] == event[0] else None
+        recorder.observe(text, modifiers)
+        self._analysis_event = None
+
+    def _analysis_attempt(self, mode, sequence, index, char):
+        recorder = self._analysis or self._new_analysis(mode, "".join(sequence))
+        recorder.target = "".join(sequence)
+        event = self._analysis_event
+        recorder.attempt(index, sequence[index], char, event[1] if event and event[0] == char else None)
+        self._analysis_event = None
+
+    def _finish_analysis(self, target, completed, sudden_death=False):
+        recorder, self._analysis = self._analysis, None
+        if recorder is None:
+            return
+        if not completed and not sudden_death:
+            return
+        if not completed and recorder.attempts:
+            target = target[:max(t["position"] for t in recorder.attempts) + 1]
+        recorder.target = target
+        recorder.metadata.update(training=self.training_run_var.get(), outcome="Completed" if completed else "Sudden-death failure")
+        record = recorder.finish()
+        if record is None:
+            self.stats_summary_var.set(self.stats_summary_var.get() + "  |  Mistake analysis unavailable for pasted/bulk input")
+            return
+        self._current_session_analysis = record
+        self.session_mistakes_button.configure(state="normal")
+        first_errors = sum(v["first_errors"] for v in record["characters"].values())
+        opportunities = sum(v["opportunities"] for v in record["characters"].values())
+        self.stats_summary_var.set(self.stats_summary_var.get() + f"  |  First-attempt mistakes: {first_errors}/{opportunities}"
+                                  f"  |  Shift technique errors: {record['shift'].get('same_hand', 0)}")
+        try:
+            save_analysis(record)
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Cannot save mistake analysis", str(error), parent=self.master)
+            return
 
     def on_key_press(self, event: tk.Event) -> None:
         """
@@ -2816,6 +3011,7 @@ class TypingTrainerApp(PlotMixin):
         if self.finished:
             return
 
+        self._analysis_key_press(event)
         if self.is_letter_mode:
             self.handle_letter_mode_keypress(event)
             return
@@ -2913,6 +3109,7 @@ class TypingTrainerApp(PlotMixin):
             return
 
         typed_text, raw_offsets = self._read_typing_input()
+        self._analysis_observe(typed_text)
         if self.is_blind_mode_active():
             self._update_blind_target_indicator(len(typed_text))
 
@@ -3091,6 +3288,7 @@ class TypingTrainerApp(PlotMixin):
                 end_error_percentage=blind_end_error_percentage or 0.0,
                 is_training_run=self.training_run_var.get()
             )
+        self._finish_analysis(self.target_text[:min(safe_index + 1, len(self.target_text))], False, True)
 
 
     def update_wpm(self, typed_text: str) -> None:
@@ -3243,6 +3441,7 @@ class TypingTrainerApp(PlotMixin):
                     f"Error %: {error_percentage:.1f}"
                 )
             self.stats_summary_var.set(summary)
+        self._finish_analysis(self.target_text, True, self.is_sudden_death_active())
 
 
     def show_result(self) -> None:

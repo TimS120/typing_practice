@@ -512,7 +512,7 @@ class GuiTests(TemporaryData, unittest.TestCase):
         self.assertEqual((self.root.winfo_width(), self.root.winfo_height()), (1100, 640))
         self.assertFalse(self.app.training_run_var.get())
         self.assertEqual(set(io_utils.load_settings()), {"theme", "font_size", "ui_font_size", "window_size",
-                                                         "keyboard_layout", "custom_characters", "coverage_threshold", "generation_language"})
+                                                         "keyboard_layout", "custom_characters", "coverage_threshold", "generation_language", "analysis_history", "analysis_minimum"})
 
     def test_layout_separates_practice_manager_and_statistics(self):
         self.assertEqual([self.app.app_tabs.tab(tab, "text") for tab in self.app.app_tabs.tabs()],
