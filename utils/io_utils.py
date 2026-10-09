@@ -225,6 +225,9 @@ def load_settings() -> dict:
     dimensions = settings.get("window_size")
     if isinstance(dimensions, str) and re.fullmatch(r"[1-9]\d{0,4}x[1-9]\d{0,4}", dimensions):
         result["window_size"] = dimensions
+    language = settings.get("generation_language")
+    if language in TEXT_LANGUAGES:
+        result["generation_language"] = language
     from .keyboard_layouts import LAYOUTS
     layout = settings.get("keyboard_layout")
     if layout in (*LAYOUTS, "Custom"):

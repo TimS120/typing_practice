@@ -190,6 +190,91 @@ class GuiTests(TemporaryData, unittest.TestCase):
         self.detector.stop()
         super().tearDown()
 
+    def finish_mock_generation(self):
+        import time
+        deadline = time.monotonic() + 3
+        while self.app._generation_pending and time.monotonic() < deadline:
+            self.root.update()
+            time.sleep(0.01)
+        self.assertFalse(self.app._generation_pending)
+
+    def test_generated_passages_are_temporary_and_reset_always_requests_new_text(self):
+        from utils.io_utils import open_encrypted_stats
+        first = "A natural paragraph. " * 20
+        second = "A different paragraph. " * 18
+        with patch("utils.ui_utils.generate_passage", side_effect=[first, second]) as generate:
+            self.app.generate_text_button.invoke()
+            self.finish_mock_generation()
+            self.assertTrue(self.app._generated_text)
+            self.assertEqual(self.app.target_text, first)
+            self.assertEqual(self.app.text_entries, [])
+            self.assertEqual(self.app.text_manager.entries, [])
+            self.assertEqual(self.app.text_listbox.size(), 0)
+            self.app.input_text.insert("1.0", first)
+            self.root.update()
+            self.app.update_typing_state()
+            self.assertTrue(self.app.finished)
+            with open_encrypted_stats(self.app.stats_file_path) as statistics:
+                self.assertEqual(len(statistics.read().splitlines()), 2)
+            self.app.handle_reset_button()
+            self.assertEqual(self.app.input_text.cget("state"), "disabled")
+            self.finish_mock_generation()
+            self.assertEqual(self.app.target_text, second)
+            self.assertEqual(generate.call_count, 2)
+            self.assertEqual(generate.call_args.args[0], "German")
+            for file in self.directory.glob("*.enc"):
+                self.assertNotIn(first, io_utils.read_encrypted(file))
+
+    def test_selecting_saved_text_discards_late_generation_result(self):
+        import threading
+        started, release = threading.Event(), threading.Event()
+        def generate(language, progress):
+            started.set()
+            release.wait(3)
+            return "Temporary result. " * 24
+        self.app.text_entries = [{"name": "Saved", "text": "Keep this text", "language": "English"}]
+        self.app.refresh_text_list()
+        self.app._load_text_from_index(0)
+        with patch("utils.ui_utils.generate_passage", side_effect=generate) as mock:
+            self.app.on_generate_text()
+            self.assertTrue(started.wait(1))
+            self.app.on_generate_text()
+            self.assertEqual(mock.call_count, 1)
+            self.app._load_text_from_index(0)
+            release.set()
+            self.finish_mock_generation()
+        self.assertEqual(self.app.target_text, "Keep this text")
+        self.assertFalse(self.app._generated_text)
+        self.assertEqual(str(self.app.generate_text_button.cget("state")), "normal")
+
+    def test_generation_failure_keeps_saved_passage_and_closing_does_not_unload(self):
+        from utils.text_generation import GenerationError
+        self.app.text_entries = [{"name": "Saved", "text": "Original text", "language": "English"}]
+        self.app.refresh_text_list()
+        self.app._load_text_from_index(0)
+        with patch("utils.ui_utils.generate_passage", side_effect=GenerationError("Model could not load")):
+            self.app.on_generate_text()
+            self.finish_mock_generation()
+        self.assertEqual(self.app.target_text, "Original text")
+        self.mock_error.assert_called_once()
+        with patch("utils.text_generation.subprocess.run") as command, patch.object(self.root, "destroy"):
+            self.app.close()
+            command.assert_not_called()
+
+    def test_generated_passage_is_not_reused_after_mode_or_helper_switch(self):
+        with patch("utils.ui_utils.generate_passage", side_effect=["First text. " * 34, "Second text. " * 33]) as generate:
+            self.app.on_generate_text()
+            self.finish_mock_generation()
+            self.app.sudden_death_mode_var.set("Blind mode")
+            self.app.on_sudden_death_mode_change()
+            self.finish_mock_generation()
+            self.assertEqual(generate.call_count, 2)
+            self.assertEqual(self.app.target_text, "Second text. " * 33)
+            self.app.start_letter_mode()
+            self.app._choose_practice("typing")
+            self.assertFalse(self.app._generated_text)
+            self.assertEqual(self.app.target_text, "")
+
     def test_language_dropdown_is_readonly_and_dash_means_unassigned(self):
         manager = self.app.text_manager
         manager.add()
@@ -427,7 +512,7 @@ class GuiTests(TemporaryData, unittest.TestCase):
         self.assertEqual((self.root.winfo_width(), self.root.winfo_height()), (1100, 640))
         self.assertFalse(self.app.training_run_var.get())
         self.assertEqual(set(io_utils.load_settings()), {"theme", "font_size", "ui_font_size", "window_size",
-                                                         "keyboard_layout", "custom_characters", "coverage_threshold"})
+                                                         "keyboard_layout", "custom_characters", "coverage_threshold", "generation_language"})
 
     def test_layout_separates_practice_manager_and_statistics(self):
         self.assertEqual([self.app.app_tabs.tab(tab, "text") for tab in self.app.app_tabs.tabs()],

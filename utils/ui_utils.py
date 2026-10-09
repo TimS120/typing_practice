@@ -10,6 +10,8 @@ are stored in a statistics file and can be visualized.
 from __future__ import annotations
 
 import random
+import queue
+import threading
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -21,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from .system_theme import system_prefers_dark
 from .text_manager import TextManager
+from .text_generation import GenerationError, generate_passage
 from .typing_input import normalize_wrapped_input
 from .keyboard_layouts import LAYOUTS, DEFAULT_LAYOUT, layout_characters, drill_characters
 
@@ -211,6 +214,12 @@ class TypingTrainerApp(PlotMixin):
         self.keyboard_layout_var = tk.StringVar(master, value=self.settings.get("keyboard_layout", DEFAULT_LAYOUT))
         self.custom_characters = self.settings.get("custom_characters", LAYOUTS[DEFAULT_LAYOUT])
         self.coverage_threshold = self.settings.get("coverage_threshold", 10)
+        self.generation_language_var = tk.StringVar(master, value=self.settings.get("generation_language", "German"))
+        self._generated_text = False
+        self._generation_revision = 0
+        self._generation_pending = False
+        self._generation_job = None
+        self._generation_messages = queue.Queue()
         self.text_manager = None
         self._loaded_typing_text = ""
         self._helper_kind = None
@@ -408,8 +417,16 @@ class TypingTrainerApp(PlotMixin):
         self.text_listbox.bind("<<ListboxSelect>>", self.on_load_selected)
         actions = ttk.Frame(library)
         actions.grid(row=2, column=0, sticky="ew", pady=(8, 0))
-        for label, command in (("Load random", self.on_load_random),):
-            ttk.Button(actions, text=label, command=command).pack(fill="x", pady=2)
+        load_actions = ttk.Frame(actions)
+        load_actions.pack(fill="x")
+        ttk.Button(load_actions, text="Load random", command=self.on_load_random).pack(side="left", fill="x", expand=True, pady=2)
+        self.generate_text_button = ttk.Button(load_actions, text="Generate text", command=self.on_generate_text)
+        self.generate_text_button.pack(side="left", fill="x", expand=True, padx=(4, 0), pady=2)
+        ttk.Label(actions, text="Generated text language").pack(anchor="w", pady=(8, 2))
+        self.generation_language_picker = ttk.Combobox(actions, textvariable=self.generation_language_var,
+            values=("English", "German"), state="readonly", font=self.ui_font, width=18)
+        self.generation_language_picker.pack(fill="x")
+        self.generation_language_picker.bind("<<ComboboxSelected>>", self.change_generation_language)
         self._build_practice_input(typing_content, "typing", column=1)
 
         drill_controls = ttk.Frame(helper)
@@ -508,6 +525,69 @@ class TypingTrainerApp(PlotMixin):
             for child in widget.winfo_children():
                 bind_scroll(child)
         bind_scroll(viewport)
+
+    def change_generation_language(self, event=None):
+        self.generation_language_picker.selection_clear()
+        self._save_preferences()
+
+    def on_generate_text(self):
+        if self._generation_pending:
+            return
+        self._choose_practice("typing")
+        self._generation_revision += 1
+        revision = self._generation_revision
+        language = self.generation_language_var.get()
+        self._generation_pending = True
+        self.generate_text_button.configure(state="disabled")
+        self.generation_language_picker.configure(state="disabled")
+        # Resetting a temporary passage must not permit another run of it.
+        if self._generated_text:
+            self.input_text.configure(state="disabled")
+        self.info_text_var.set("Starting LM Studio…")
+        messages = self._generation_messages
+
+        def worker():
+            try:
+                passage = generate_passage(language, lambda status: messages.put((revision, "status", status)))
+                messages.put((revision, "result", passage))
+            except Exception as error:
+                detail = str(error) if isinstance(error, GenerationError) else "Text generation failed. Check LM Studio and try again."
+                messages.put((revision, "error", detail))
+
+        # A running request never prevents closing the GUI; LM Studio owns its model.
+        threading.Thread(target=worker, name="typing-text-generation", daemon=True).start()
+        self._generation_job = self.master.after(100, self._poll_generation)
+
+    def _poll_generation(self):
+        self._generation_job = None
+        while True:
+            try:
+                revision, kind, value = self._generation_messages.get_nowait()
+            except queue.Empty:
+                break
+            current = revision == self._generation_revision
+            if kind == "status":
+                if current:
+                    self.info_text_var.set(value)
+                continue
+            self._generation_pending = False
+            self.generate_text_button.configure(state="normal")
+            self.generation_language_picker.configure(state="readonly")
+            if not current:
+                continue
+            if kind == "error":
+                self.info_text_var.set("Generation failed. Try Generate text again.")
+                messagebox.showerror("Cannot generate text", value, parent=self.master)
+                continue
+            self._generated_text = True
+            self.text_listbox.selection_clear(0, tk.END)
+            self.selected_text = value
+            self._loaded_typing_text = value
+            self._apply_loaded_text()
+            self.info_text_var.set(f"Generated {self.generation_language_var.get()} text · {len(value)} characters. "
+                                   "Temporary passage; Reset generates a new one.")
+        if self._generation_pending:
+            self._generation_job = self.master.after(100, self._poll_generation)
 
     def get_layout_characters(self):
         return layout_characters(self.keyboard_layout_var.get(), self.custom_characters)
@@ -700,6 +780,10 @@ class TypingTrainerApp(PlotMixin):
             self.practice_type_var.set(tab_key)
             self._refresh_mode_description()
             return
+        self._generation_revision += 1
+        if self._generated_text:
+            self._loaded_typing_text = ""
+            self._generated_text = False
         # A practice-type switch starts a fresh run instead of carrying a
         # helper drill's input handling and instructions into text typing.
         self.reset_session()
@@ -838,6 +922,7 @@ class TypingTrainerApp(PlotMixin):
                        "keyboard_layout": self.keyboard_layout_var.get(),
                        "custom_characters": self.custom_characters,
                        "coverage_threshold": self.coverage_threshold,
+                       "generation_language": self.generation_language_var.get(),
                        "window_size": f"{self.master.winfo_width()}x{self.master.winfo_height()}"})
 
     def close(self) -> None:
@@ -849,7 +934,7 @@ class TypingTrainerApp(PlotMixin):
         except OSError as error:
             messagebox.showerror("Settings", f"Could not save settings: {error}", parent=self.master)
             return
-        for job in (self._theme_job, self._settings_job, self._title_bar_refresh_job, self.update_job_id):
+        for job in (self._theme_job, self._settings_job, self._title_bar_refresh_job, self.update_job_id, self._generation_job):
             if job is not None:
                 self.master.after_cancel(job)
         self._theme_executor.shutdown(wait=False, cancel_futures=True)
@@ -898,6 +983,8 @@ class TypingTrainerApp(PlotMixin):
         self._update_blind_target_indicator()
         if self.sudden_death_mode_combobox is not None:
             self.sudden_death_mode_combobox.selection_clear()
+        if self._generated_text and self._active_tab_key == "typing":
+            self.on_generate_text()
 
     def _apply_sudden_death_state(self, enabled: bool) -> None:
         """
@@ -1434,6 +1521,8 @@ class TypingTrainerApp(PlotMixin):
             )
             return
 
+        self._generation_revision += 1
+        self._generated_text = False
         self.app_tabs.select(self.practice_page)
         self._choose_practice("typing")
         self.selected_text = self.texts[index]
@@ -1540,6 +1629,8 @@ class TypingTrainerApp(PlotMixin):
             self.update_job_id = None
         self._update_input_visibility()
         self._update_blind_target_indicator()
+        if self._generated_text and self._generation_pending:
+            self.input_text.configure(state="disabled")
 
 
     def handle_reset_button(self) -> None:
@@ -1558,6 +1649,9 @@ class TypingTrainerApp(PlotMixin):
             self.start_number_mode()
             return
 
+        if self._generated_text:
+            self.on_generate_text()
+            return
         self.reset_session()
         self._refresh_mode_description(update_status=True)
 
