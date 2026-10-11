@@ -10,12 +10,23 @@ LAYOUTS = {
 }
 DEFAULT_LAYOUT = "German QWERTZ"
 
+# Preset drills use ordinary keys, Shift or AltGr, without composition,
+# dead-key sequences, lock-state tricks or Shift+AltGr combinations. Keep
+# coverage repertoires separate: saved texts may still contain these symbols.
+DRILL_EXCLUSIONS = {
+    "German QWERTZ": frozenset("ẞ^`´"),
+    "US QWERTY": frozenset(),
+    "UK QWERTY": frozenset("¦"),
+}
+
 
 def layout_characters(layout, custom=""):
     return "".join(dict.fromkeys(custom if layout == "Custom" else LAYOUTS[layout]))
 
 
-def drill_characters(characters, kind):
+def drill_characters(characters, kind, layout=None):
+    excluded = DRILL_EXCLUSIONS.get(layout, frozenset())
+    characters = "".join(c for c in characters if c not in excluded)
     if kind == "letter":
         return "".join(c for c in characters if c.isalpha())
     if kind == "number":

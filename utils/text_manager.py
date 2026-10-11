@@ -5,6 +5,7 @@ from tkinter import ttk, messagebox
 import unicodedata
 
 from .keyboard_layouts import character_coverage, character_label
+from .table_sort import indicate_sort
 
 from .io_utils import TEXT_FILE_NAME, TEXT_LANGUAGES, get__file_path, save_texts
 
@@ -183,6 +184,7 @@ class TextManager:
         characters = self.app.get_layout_characters()
         rows = character_coverage(self.app.text_entries, characters, self.app.coverage_threshold)
         column, reverse = self.coverage_sort
+        indicate_sort(self.coverage_table, column, reverse)
         if column != "count" or reverse:
             rows.sort(key=lambda row: (row[1], ord(row[0])) if column == "count"
                       else ord(row[0]) if column == "code" else character_label(row[0]), reverse=reverse)

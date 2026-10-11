@@ -258,3 +258,53 @@ class AnalysisGuiTests(unittest.TestCase):
         self.app.show_current_session_mistakes()
         self.assertEqual(self.app.session_analysis_view.data['runs'], 1)
         self.assertEqual(load_analysis(), [])
+
+    def test_sort_arrows_match_numeric_and_text_order_and_survive_refresh(self):
+        self.load('aa' + 'b' * 10 + 'c')
+        for char in self.app.target_text:
+            self.type(char)
+        self.app.show_current_session_mistakes()
+        for view in (self.app.analysis_view, self.app.session_analysis_view):
+            view.refresh(save=False)
+            table = view.tables['characters']
+            self.assertEqual(table.heading('Error %', 'text'), 'Error % ↓')
+            def click(column):
+                self.root.tk.call(table.heading(column, 'command'))
+            def values(column):
+                return [table.set(item, column) for item in table.get_children()]
+            click('Opportunities')
+            self.assertEqual(table.heading('Opportunities', 'text'), 'Opportunities ↑')
+            self.assertEqual(table.heading('Error %', 'text'), 'Error %')
+            self.assertEqual(values('Opportunities'), ['1', '2', '10'])
+            click('Opportunities')
+            self.assertEqual(values('Opportunities'), ['10', '2', '1'])
+            self.assertEqual(table.heading('Opportunities', 'text'), 'Opportunities ↓')
+            view.refresh(save=False)
+            self.assertEqual(values('Opportunities'), ['10', '2', '1'])
+            self.assertEqual(table.heading('Opportunities', 'text'), 'Opportunities ↓')
+            click('Character')
+            self.assertEqual(values('Character'), ['a', 'b', 'c'])
+            click('Character')
+            self.assertEqual(values('Character'), ['c', 'b', 'a'])
+            self.assertEqual(table.heading('Character', 'text'), 'Character ↓')
+            self.assertEqual(table.heading('Opportunities', 'text'), 'Opportunities')
+            headings = [table.heading(column, 'text') for column in table['columns']]
+            self.assertEqual(sum(label.count('↑') + label.count('↓') for label in headings), 1)
+
+    def test_coverage_sort_arrow_tracks_default_toggle_and_column_change(self):
+        self.load('aab')
+        manager = self.app.text_manager
+        manager.open_coverage()
+        table = manager.coverage_table
+        self.assertEqual(table.heading('count', 'text'), 'Count ↑')
+        self.root.tk.call(table.heading('count', 'command'))
+        self.assertEqual(table.heading('count', 'text'), 'Count ↓')
+        counts = [int(table.set(item, 'count')) for item in table.get_children()]
+        self.assertEqual(counts, sorted(counts, reverse=True))
+        manager.refresh_coverage()
+        self.assertEqual(table.heading('count', 'text'), 'Count ↓')
+        self.root.tk.call(table.heading('code', 'command'))
+        self.assertEqual(table.heading('code', 'text'), 'Unicode ↑')
+        self.assertEqual(table.heading('count', 'text'), 'Count')
+        codes = [table.set(item, 'code') for item in table.get_children()]
+        self.assertEqual(codes, sorted(codes))

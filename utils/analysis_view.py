@@ -6,6 +6,7 @@ from tkinter import ttk, messagebox
 
 from .keyboard_layouts import LAYOUTS, character_label
 from .mistake_analysis import HISTORY_RANGES, ERROR_LABELS, aggregate, category, filter_records, findings, load_analysis
+from .table_sort import sort_table
 
 
 class AnalysisView:
@@ -56,7 +57,7 @@ class AnalysisView:
         self.summary_label.grid(row=2, column=0, sticky="ew", pady=(2, 6))
         self.note = ttk.Label(self.page, text="Newly recorded finished runs only; Reset/switch/closure discard unfinished data. "
                               "Paste/bulk edits are excluded. Same-hand Shift is a technique issue, separate from accuracy. "
-                              "Custom layouts have no physical Shift mapping. Timing excludes gaps over 5 seconds. Sparse samples stay visible but are not ranked.", wraplength=1000)
+                              "Custom layouts have no physical Shift mapping. Timing excludes gaps over 5 seconds. Sparse samples stay visible but are excluded from summary ranking.", wraplength=1000)
         if session_record is not None:
             self.note.configure(text="Only this finished session is shown. Results are observations from one run. "
                                 "Same-hand Shift is a technique issue, separate from accuracy. "
@@ -93,6 +94,13 @@ class AnalysisView:
             horizontal.grid(row=1, column=0, sticky="ew")
             table.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
             self.tables[key] = table
+            default_column, descending = {
+                "characters": ("Error %", True), "categories": ("Category", False),
+                "confusions": ("Count", True), "errors": ("Count", True),
+                "technique": ("Metric", False), "transitions": ("Average interval ms", True),
+                "progress": ("Date", False),
+            }[key]
+            sort_table(table, default_column, descending)
         self.page.bind("<Configure>", self.resize)
         self.records = []
         self.data = aggregate([])
@@ -193,6 +201,7 @@ class AnalysisView:
             insert("transitions", " → ".join(character_label(c) for c in pair), count, f"{ms / count:.0f}",
                    "Enough data" if count >= minimum else "Not enough data")
         if self.session_record is not None:
+            self.apply_sorting()
             return
         dates = {}
         for record in self.records:
@@ -205,16 +214,12 @@ class AnalysisView:
             known = data["shift"]["same_hand"] + data["shift"]["opposite_hand"]
             insert("progress", day, len(records), n, errors, f"{errors / n * 100:.1f}" if n else "—",
                    f"{data['shift']['same_hand'] / known * 100:.1f}" if known else "Unknown")
+        self.apply_sorting()
+
+    def apply_sorting(self):
+        for table in self.tables.values():
+            sort_table(table, table._sort_column, table._sort_reverse)
 
     @staticmethod
     def sort(table, column):
-        def key(item):
-            value = table.set(item, column)
-            try:
-                return 0, float(value)
-            except ValueError:
-                return 1, value
-        reverse = getattr(table, "_sort_column", None) == column and not getattr(table, "_sort_reverse", False)
-        table._sort_column, table._sort_reverse = column, reverse
-        for index, item in enumerate(sorted(table.get_children(), key=key, reverse=reverse)):
-            table.move(item, "", index)
+        sort_table(table, column)

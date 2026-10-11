@@ -57,6 +57,25 @@ class StorageTests(TemporaryData, unittest.TestCase):
         self.assertIn("ß", drill_characters(characters, "letter"))
         self.assertNotIn(" ", drill_characters(characters, "special"))
 
+    def test_preset_drills_exclude_difficult_keys_by_layout(self):
+        from utils.keyboard_layouts import drill_characters, LAYOUTS, layout_characters
+        for layout, excluded in (("German QWERTZ", "ẞ^`´"), ("UK QWERTY", "¦")):
+            for kind in ('letter', 'special', 'number'):
+                pool = drill_characters(LAYOUTS[layout], kind, layout)
+                self.assertFalse(set(pool) & set(excluded))
+            # Coverage and saved passages retain their full repertoire.
+            self.assertTrue(set(excluded) <= set(layout_characters(layout)))
+        german_letters = drill_characters(LAYOUTS['German QWERTZ'], 'letter', 'German QWERTZ')
+        self.assertTrue(set('ßäöüÄÖÜµ') <= set(german_letters))
+        german_symbols = drill_characters(LAYOUTS['German QWERTZ'], 'special', 'German QWERTZ')
+        self.assertTrue(set('€²³@{}[]\\|~§°') <= set(german_symbols))
+        for layout in ('US QWERTY', 'UK QWERTY'):
+            self.assertTrue(set('^`~') <= set(drill_characters(LAYOUTS[layout], 'special', layout)))
+        for layout in LAYOUTS:
+            self.assertEqual(drill_characters(LAYOUTS[layout], 'number', layout), '0123456789')
+        self.assertEqual(drill_characters('ẞß', 'letter', 'Custom'), 'ẞß')
+        self.assertEqual(drill_characters('^`´¦', 'special', 'Custom'), '^`´¦')
+
     def test_keyboard_preferences_validation(self):
         settings = {"keyboard_layout": "Custom", "custom_characters": "aA? \t\n",
                     "coverage_threshold": 0}

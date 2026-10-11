@@ -514,6 +514,7 @@ class TypingTrainerApp(PlotMixin):
         keyboard = ttk.LabelFrame(page, text="Keyboard layout", padding=14)
         keyboard.grid(row=3, column=0, sticky="ew", pady=(0, 14))
         ttk.Label(keyboard, text="Determines coverage characters and the Letters / Characters / Numbers drill sets. "
+                  "Preset drills exclude characters needing composition or uncommon modifier combinations. "
                   "Text languages do not filter coverage.", wraplength=750).pack(anchor="w", pady=(0, 10))
         picker = ttk.Combobox(keyboard, textvariable=self.keyboard_layout_var,
                               values=(*LAYOUTS, "Custom"), state="readonly", font=self.ui_font, width=24)
@@ -628,7 +629,7 @@ class TypingTrainerApp(PlotMixin):
         self.change_keyboard_layout()
 
     def _prepare_drill_characters(self, kind):
-        characters = drill_characters(self.get_layout_characters(), kind)
+        characters = drill_characters(self.get_layout_characters(), kind, self.keyboard_layout_var.get())
         if not characters:
             messagebox.showinfo("Keyboard layout", f"The selected layout has no characters for the {kind} drill.", parent=self.master)
             return False
