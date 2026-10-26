@@ -565,6 +565,78 @@ class GuiTests(TemporaryData, unittest.TestCase):
         self.app._refresh_mode_description()
         self.assertIn("Training run", self.app.description_var.get())
 
+    def test_leaving_typing_discards_unfinished_session_without_statistics(self):
+        self.load_wrapped_text()
+        for page in (self.app.text_management_page, self.app.statistics_page, self.app.settings_page):
+            with self.subTest(page=page):
+                self.app.app_tabs.select(self.app.practice_page)
+                self.root.update()
+                self.app.input_text.insert("1.0", "alpha")
+                self.root.update()
+                self.assertIsNotNone(self.app.start_time)
+                self.assertIsNotNone(self.app.update_job_id)
+                before = {p.name: p.read_bytes() for p in self.directory.iterdir() if p.is_file()}
+                self.app.app_tabs.select(page)
+                self.root.update()
+                self.assertIsNone(self.app.start_time)
+                self.assertIsNone(self.app.update_job_id)
+                self.assertIsNone(self.app._analysis)
+                self.assertFalse(self.app.finished)
+                self.assertEqual(self.app.input_text.get("1.0", "end-1c"), "")
+                self.assertEqual({p.name: p.read_bytes() for p in self.directory.iterdir() if p.is_file()}, before)
+                self.app.app_tabs.select(self.app.practice_page)
+                self.root.update()
+                self.assertEqual(self.app.text_listbox.curselection(), (0,))
+                self.assertEqual(self.app.target_text, self.app.text_entries[0]["text"])
+
+    def test_saved_edits_follow_loaded_text_through_reorder_and_deletion(self):
+        manager = self.app.text_manager
+        for name in ("First", "Second"):
+            manager.add()
+            manager.name_var.set(name)
+            manager.language_var.set("English")
+            manager.body.insert("1.0", name + " passage")
+        self.assertTrue(manager.save())
+        self.app._load_text_from_index(1)
+        self.root.update()
+        self.app.input_text.insert("1.0", "Sec")
+        self.root.update()
+        self.app.open_text_manager()
+        self.root.update()
+        manager.show_entry(1)
+        manager.name_var.set("Renamed")
+        manager.language_var.set("German")
+        manager.body.delete("1.0", "end")
+        updated = " updated\tpassage\nwith whitespace  "
+        manager.body.insert("1.0", updated)
+        manager.move(-1)
+        self.assertTrue(manager.save())
+        self.app.app_tabs.select(self.app.practice_page)
+        self.root.update()
+        self.assertEqual(self.app.text_listbox.curselection(), (0,))
+        self.assertEqual(self.app.text_listbox.get(0), "01  Renamed")
+        self.assertEqual(self.app.target_text, updated)
+        self.assertEqual(self.app.display_text.get("1.0", "end-1c"), updated)
+        self.assertEqual(self.app._loaded_typing_language, "German")
+        self.assertEqual(self.app.input_text.get("1.0", "end-1c"), "")
+        self.app.start_letter_mode()
+        self.app.open_text_manager()
+        self.root.update()
+        manager.body.insert("end", " saved again")
+        self.assertTrue(manager.save())
+        self.app._choose_practice("typing")
+        self.root.update()
+        self.assertEqual(self.app.target_text, updated + " saved again")
+        self.app.open_text_manager()
+        self.root.update()
+        with patch("tkinter.messagebox.askyesno", return_value=True):
+            manager.delete()
+        self.assertTrue(manager.save())
+        self.app.app_tabs.select(self.app.practice_page)
+        self.root.update()
+        self.assertEqual(self.app.target_text, "")
+        self.assertEqual(self.app.text_listbox.curselection(), ())
+
     def test_text_manager_drafts_survive_navigation(self):
         self.app.open_text_manager()
         manager = self.app.text_manager

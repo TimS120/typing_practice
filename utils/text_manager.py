@@ -34,6 +34,8 @@ class TextManager:
         self.app = app
         self.entries = copy.deepcopy(app.text_entries)
         self.saved_entries = copy.deepcopy(self.entries)
+        # Track saved rows through draft renames, deletions and reordering.
+        self.source_indices = list(range(len(self.entries)))
         self.coverage_window = None
         self.index = None
         self.drag_index = None
@@ -313,6 +315,7 @@ class TextManager:
     def add(self):
         self.commit_editor()
         self.entries.append({"name": "New text", "text": "", "language": ""})
+        self.source_indices.append(None)
         self.show_entry(len(self.entries) - 1)
         self.status_var.set("Unsaved changes")
         self.name_entry.focus_set()
@@ -324,6 +327,7 @@ class TextManager:
         if not messagebox.askyesno("Delete text", f"Delete “{self.name_var.get()}”?", parent=self.window):
             return
         self.entries.pop(self.index)
+        self.source_indices.pop(self.index)
         self.show_entry(min(self.index, len(self.entries) - 1) if self.entries else None)
         self.status_var.set("Unsaved changes")
 
@@ -332,6 +336,7 @@ class TextManager:
             return
         self.commit_editor()
         self.entries.insert(target, self.entries.pop(self.index))
+        self.source_indices.insert(target, self.source_indices.pop(self.index))
         self.show_entry(target)
         self.status_var.set("Unsaved changes")
 
@@ -363,9 +368,15 @@ class TextManager:
         except (OSError, ValueError) as error:
             messagebox.showerror("Cannot save texts", str(error), parent=self.window)
             return False
+        loaded_index = self.app._loaded_typing_index
+        self.app._loaded_typing_index = (
+            self.source_indices.index(loaded_index)
+            if loaded_index is not None and loaded_index in self.source_indices else None
+        )
         self.app.text_entries = copy.deepcopy(self.entries)
         self.app.refresh_text_list()
         self.saved_entries = copy.deepcopy(self.entries)
+        self.source_indices = list(range(len(self.entries)))
         self.status_var.set("Changes saved")
         self.refresh_coverage()
         return True
@@ -376,6 +387,7 @@ class TextManager:
                 "Discard changes", "Discard unsaved changes to your texts?", parent=self.window):
             return
         self.entries = copy.deepcopy(self.saved_entries)
+        self.source_indices = list(range(len(self.entries)))
         self.show_entry(0 if self.entries else None)
         self.status_var.set("Changes discarded")
 

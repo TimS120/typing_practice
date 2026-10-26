@@ -234,6 +234,7 @@ class TypingTrainerApp(PlotMixin):
         self._loaded_typing_language = ""
         self.text_manager = None
         self._loaded_typing_text = ""
+        self._loaded_typing_index = None
         self._helper_kind = None
         self._theme_job = None
         self._settings_job = None
@@ -599,6 +600,7 @@ class TypingTrainerApp(PlotMixin):
                 messagebox.showerror("Cannot generate text", value, parent=self.master)
                 continue
             self._generated_text = True
+            self._loaded_typing_index = None
             self._loaded_typing_language = self.generation_language_var.get()
             self.text_listbox.selection_clear(0, tk.END)
             self.selected_text = value
@@ -762,6 +764,11 @@ class TypingTrainerApp(PlotMixin):
         self._set_active_tab(key)
 
     def _on_main_tab_changed(self, event=None):
+        if (self.app_tabs.select() != str(self.practice_page)
+                and self._active_tab_key == "typing" and not self.finished):
+            # Discard unfinished input and cancel its timer without saving results.
+            self.reset_session()
+            self._refresh_mode_description(update_status=True)
         if self.app_tabs.select() == str(self.text_management_page) and self.text_manager is None:
             self.text_manager = TextManager(self, parent=self.text_management_page)
 
@@ -935,6 +942,24 @@ class TypingTrainerApp(PlotMixin):
         self.text_listbox.delete(0, tk.END)
         for index, entry in enumerate(self.text_entries, 1):
             self.text_listbox.insert(tk.END, f"{index:02d}  {entry['name']}")
+        index = self._loaded_typing_index
+        if index is not None and 0 <= index < len(self.text_entries):
+            self.text_listbox.selection_set(index)
+            self.text_listbox.see(index)
+            entry = self.text_entries[index]
+            text, language = entry["text"], entry.get("language", "")
+        elif not self._generated_text:
+            self._loaded_typing_index = None
+            text, language = "", ""
+        else:
+            return
+        changed = (text != self._loaded_typing_text
+                   or language != self._loaded_typing_language)
+        self._loaded_typing_text = text
+        self._loaded_typing_language = language
+        if changed and self._active_tab_key == "typing":
+            self.selected_text = text
+            self._apply_loaded_text()
 
     def open_text_manager(self) -> None:
         if self.text_manager is None:
@@ -1597,6 +1622,9 @@ class TypingTrainerApp(PlotMixin):
         self._generated_text = False
         self.app_tabs.select(self.practice_page)
         self._choose_practice("typing")
+        self._loaded_typing_index = index
+        self.text_listbox.selection_clear(0, tk.END)
+        self.text_listbox.selection_set(index)
         self._loaded_typing_language = self.text_entries[index].get("language", "")
         self.selected_text = self.texts[index]
         self._loaded_typing_text = self.selected_text
