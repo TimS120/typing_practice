@@ -14,6 +14,9 @@ import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 from matplotlib.widgets import Button
+from matplotlib.figure import Figure
+
+from .statistics_report import StatisticsReport, context_figures
 import numpy as np
 
 from .backend import parse_training_flag
@@ -111,6 +114,41 @@ class PlotMixin:
         "legend_edgecolor": "#555555"
     }
 
+    def _plot_daily_metrics(self, ax, positions, dates, daily_stats, metrics, palette):
+        """Use an independently scaled, labeled axis for each daily metric."""
+        axes = [ax, ax.twinx(), ax.twinx()]
+        axes[2].spines["right"].set_position(("outward", 68))
+        colors = [palette["daily_speed_color"], palette["daily_error_color"],
+                  palette["daily_duration_color"]]
+        handles = []
+        for target, (values, label), color in zip(axes, metrics, colors):
+            # Keep the actual date positions, but omit unrecorded days so the
+            # line connects successive observations without artificial zeros.
+            points = [(position, value) for position, day, value in zip(positions, dates, values)
+                      if day in daily_stats and np.isfinite(value)]
+            x, measured = zip(*points) if points else ([], [])
+            line, = target.plot(x, measured, marker="o", markersize=3,
+                                linewidth=1.5, color=color, label=label)
+            target.set_ylabel(label, color=color)
+            target.tick_params(axis="y", colors=color)
+            target._metric_color = color
+            # A 12.5% data-range margin leaves 10% of the visible axis height
+            # free above and below the extrema, including flat/zero series.
+            target.margins(y=0.125)
+            handles.append(line)
+        legend = ax.legend(handles=handles, loc="upper left", fontsize=8)
+        self._style_legend(legend, palette)
+        return axes
+
+    def _show_statistics_report(self, fig, paths, speed_label):
+        report = getattr(self, "_statistics_report", None)
+        if report is not None and report.window.winfo_exists():
+            report.close()
+        self._statistics_report = StatisticsReport(
+            self, fig, context_figures(self, paths, speed_label),
+            f"{speed_label} statistics · {self.stats_mode_var.get() if paths else 'All practice modes'}"
+        )
+
     def _get_plot_palette(self) -> dict[str, Any]:
         """
         Return the Matplotlib palette for the currently selected theme.
@@ -130,21 +168,27 @@ class PlotMixin:
         Apply the palette colors to figure, axes, ticks, and labels.
         """
         text_color = palette["text_color"]
+        for label in fig.texts:
+            label.set_color(text_color)
         fig.patch.set_facecolor(palette["figure_facecolor"])
         for ax in fig.axes:
             try:
                 ax.set_facecolor(palette["axes_facecolor"])
             except Exception:
                 pass
-            ax.tick_params(colors=text_color)
+            axis_color = getattr(ax, "_metric_color", text_color)
+            ax.tick_params(axis="x", colors=text_color)
+            ax.tick_params(axis="y", colors=axis_color)
             if hasattr(ax, "xaxis"):
                 ax.xaxis.label.set_color(text_color)
             if hasattr(ax, "yaxis"):
-                ax.yaxis.label.set_color(text_color)
+                ax.yaxis.label.set_color(axis_color)
             if hasattr(ax, "zaxis"):
                 ax.zaxis.label.set_color(text_color)
-            for label in ax.get_xticklabels() + ax.get_yticklabels():
+            for label in ax.get_xticklabels():
                 label.set_color(text_color)
+            for label in ax.get_yticklabels():
+                label.set_color(axis_color)
             if hasattr(ax, "get_zticklabels"):
                 for label in ax.get_zticklabels():
                     label.set_color(text_color)
@@ -489,8 +533,7 @@ class PlotMixin:
                 current_day += timedelta(days=1)
 
         palette = self._get_plot_palette()
-        fig = plt.figure(figsize=(12, 10))
-        self._configure_figure_window(fig)
+        fig = Figure(figsize=(11, 22))
         grid_spec = fig.add_gridspec(4, 2, height_ratios=[1.0, 1.2, 1.0, 0.8])
         grid_spec.update(hspace=0.75, wspace=0.4)
 
@@ -553,28 +596,11 @@ class PlotMixin:
 
         if daily_dates:
             positions = np.arange(len(daily_dates))
-            bar_width = 0.25
-            ax_time.bar(
-                positions - bar_width,
-                daily_speed,
-                width=bar_width,
-                color=palette["daily_speed_color"],
-                label=f"Average {speed_short_label}"
-            )
-            ax_time.bar(
-                positions,
-                daily_correct,
-                width=bar_width,
-                color=palette["daily_error_color"],
-                label=f"Average {correct_label.lower()}"
-            )
-            ax_time.bar(
-                positions + bar_width,
-                daily_duration_minutes,
-                width=bar_width,
-                color=palette["daily_duration_color"],
-                label="Total time (min)"
-            )
+            self._plot_daily_metrics(ax_time, positions, daily_dates, daily_stats, (
+                (daily_speed, f"Average {speed_short_label}"),
+                (daily_correct, f"Average {correct_label.lower()}"),
+                (daily_duration_minutes, "Total time (min)"),
+            ), palette)
             formatted_days = [day.strftime("%Y-%m-%d") for day in daily_dates]
             ax_time.set_xticks(positions)
             ax_time.set_xticklabels(
@@ -582,12 +608,9 @@ class PlotMixin:
                 rotation=45,
                 ha="right"
             )
-            ax_time.set_ylabel("Daily averages / total time")
             ax_time.set_title(
                 f"Daily averages ({speed_short_label} vs {correct_label.lower()})"
             )
-            legend = ax_time.legend()
-            self._style_legend(legend, palette)
 
             cumulative_duration_minutes: List[float] = []
             running_total = 0.0
@@ -595,10 +618,10 @@ class PlotMixin:
                 running_total += minutes
                 cumulative_duration_minutes.append(running_total)
 
-            ax_time_spent.bar(
+            ax_time_spent.plot(
                 positions,
                 daily_duration_minutes,
-                width=0.4,
+                marker="o",
                 color=palette["time_per_day_bar_color"],
                 label="Time per day (min)"
             )
@@ -655,15 +678,16 @@ class PlotMixin:
             )
             ax_time_spent.set_xticks([])
             ax_time_spent.set_yticks([])
-        ax_time_spent_right.set_yticks([])
+        if not daily_dates:
+            ax_time_spent_right.set_yticks([])
 
         formatter = mticker.FormatStrFormatter("%.1f")
         ax_time_spent.yaxis.set_major_formatter(formatter)
         ax_time_spent_right.yaxis.set_major_formatter(formatter)
 
         self._apply_plot_theme(fig, palette)
-        plt.tight_layout(pad=1.3)
-        plt.show()
+        fig.subplots_adjust(top=0.94, bottom=0.04, left=0.1, right=0.76)
+        self._show_statistics_report(fig, [file_path], speed_short_label)
 
     def _show_blind_stats(
         self,
@@ -795,8 +819,7 @@ class PlotMixin:
                 current_day += timedelta(days=1)
 
         palette = self._get_plot_palette()
-        fig = plt.figure(figsize=(12, 10))
-        self._configure_figure_window(fig)
+        fig = Figure(figsize=(11, 22))
         grid_spec = fig.add_gridspec(4, 2, height_ratios=[1.0, 1.2, 1.0, 0.8])
         grid_spec.update(hspace=0.75, wspace=0.4)
 
@@ -856,28 +879,11 @@ class PlotMixin:
 
         if daily_dates:
             positions = np.arange(len(daily_dates))
-            bar_width = 0.25
-            ax_time.bar(
-                positions - bar_width,
-                daily_speed,
-                width=bar_width,
-                color=palette["daily_speed_color"],
-                label=f"Average {speed_short_label}"
-            )
-            ax_time.bar(
-                positions,
-                daily_error,
-                width=bar_width,
-                color=palette["daily_error_color"],
-                label="Average end error %"
-            )
-            ax_time.bar(
-                positions + bar_width,
-                daily_duration_minutes,
-                width=bar_width,
-                color=palette["daily_duration_color"],
-                label="Total time (min)"
-            )
+            self._plot_daily_metrics(ax_time, positions, daily_dates, daily_stats, (
+                (daily_speed, f"Average {speed_short_label}"),
+                (daily_error, "Average end error %"),
+                (daily_duration_minutes, "Total time (min)"),
+            ), palette)
             formatted_days = [day.strftime("%Y-%m-%d") for day in daily_dates]
             ax_time.set_xticks(positions)
             ax_time.set_xticklabels(
@@ -885,12 +891,9 @@ class PlotMixin:
                 rotation=45,
                 ha="right"
             )
-            ax_time.set_ylabel("Daily averages / total time")
             ax_time.set_title(
                 f"Daily averages ({speed_short_label} vs end error %)"
             )
-            legend = ax_time.legend()
-            self._style_legend(legend, palette)
 
             cumulative_duration_minutes: List[float] = []
             cumulative_total = 0.0
@@ -898,10 +901,10 @@ class PlotMixin:
                 cumulative_total += minutes
                 cumulative_duration_minutes.append(cumulative_total)
 
-            ax_time_spent.bar(
+            ax_time_spent.plot(
                 positions,
                 daily_duration_minutes,
-                width=0.6,
+                marker="o",
                 color=palette["time_per_day_bar_color"],
                 label="Time per day (min)"
             )
@@ -964,8 +967,8 @@ class PlotMixin:
         ax_time_spent_right.yaxis.set_major_formatter(formatter)
 
         self._apply_plot_theme(fig, palette)
-        plt.tight_layout(pad=1.3)
-        plt.show()
+        fig.subplots_adjust(top=0.94, bottom=0.04, left=0.1, right=0.76)
+        self._show_statistics_report(fig, [file_path], speed_short_label)
 
     def show_stats(self) -> None:
         """
@@ -1112,8 +1115,7 @@ class PlotMixin:
                 current_day += timedelta(days=1)
 
         palette = self._get_plot_palette()
-        fig = plt.figure(figsize=(12, 10))
-        self._configure_figure_window(fig)
+        fig = Figure(figsize=(11, 22))
         grid_spec = fig.add_gridspec(4, 2, height_ratios=[1.0, 1.2, 1.0, 0.8])
         grid_spec.update(hspace=0.75, wspace=0.4)
 
@@ -1173,28 +1175,11 @@ class PlotMixin:
 
         if daily_dates:
             positions = np.arange(len(daily_dates))
-            bar_width = 0.25
-            ax_time.bar(
-                positions - bar_width,
-                daily_wpm,
-                width=bar_width,
-                color=palette["daily_speed_color"],
-                label="Average WPM"
-            )
-            ax_time.bar(
-                positions,
-                daily_error,
-                width=bar_width,
-                color=palette["daily_error_color"],
-                label="Average error %"
-            )
-            ax_time.bar(
-                positions + bar_width,
-                daily_duration_minutes,
-                width=bar_width,
-                color=palette["daily_duration_color"],
-                label="Total time (min)"
-            )
+            self._plot_daily_metrics(ax_time, positions, daily_dates, daily_stats, (
+                (daily_wpm, "Average WPM"),
+                (daily_error, "Average error %"),
+                (daily_duration_minutes, "Total time (min)"),
+            ), palette)
             formatted_days = [day.strftime("%Y-%m-%d") for day in daily_dates]
             ax_time.set_xticks(positions)
             ax_time.set_xticklabels(
@@ -1202,10 +1187,7 @@ class PlotMixin:
                 rotation=45,
                 ha="right"
             )
-            ax_time.set_ylabel("Daily averages / total time")
             ax_time.set_title("Daily averages (WPM vs error %)")
-            legend = ax_time.legend()
-            self._style_legend(legend, palette)
 
             cumulative_duration_minutes: List[float] = []
             running_total = 0.0
@@ -1213,10 +1195,10 @@ class PlotMixin:
                 running_total += minutes
                 cumulative_duration_minutes.append(running_total)
 
-            ax_time_spent.bar(
+            ax_time_spent.plot(
                 positions,
                 daily_duration_minutes,
-                width=0.4,
+                marker="o",
                 color=palette["time_per_day_bar_color"],
                 label="Time per day (min)"
             )
@@ -1278,8 +1260,8 @@ class PlotMixin:
         ax_time_spent_right.yaxis.set_major_formatter(formatter)
 
         self._apply_plot_theme(fig, palette)
-        plt.tight_layout(pad=1.3)
-        plt.show()
+        fig.subplots_adjust(top=0.94, bottom=0.04, left=0.1, right=0.76)
+        self._show_statistics_report(fig, [self.stats_file_path], "WPM")
 
     def show_letter_stats(self) -> None:
         """
@@ -1402,8 +1384,7 @@ class PlotMixin:
                 current_day += timedelta(days=1)
 
         palette = self._get_plot_palette()
-        fig = plt.figure(figsize=(12, 10))
-        self._configure_figure_window(fig)
+        fig = Figure(figsize=(11, 22))
         grid_spec = fig.add_gridspec(4, 2, height_ratios=[1.0, 1.2, 1.0, 0.8])
         grid_spec.update(hspace=0.75, wspace=0.4)
 
@@ -1463,28 +1444,11 @@ class PlotMixin:
 
         if daily_dates:
             positions = np.arange(len(daily_dates))
-            bar_width = 0.25
-            ax_time.bar(
-                positions - bar_width,
-                daily_speed,
-                width=bar_width,
-                color=palette["daily_speed_color"],
-                label="Average letters/min"
-            )
-            ax_time.bar(
-                positions,
-                daily_error,
-                width=bar_width,
-                color=palette["daily_error_color"],
-                label="Average error %"
-            )
-            ax_time.bar(
-                positions + bar_width,
-                daily_duration_minutes,
-                width=bar_width,
-                color=palette["daily_duration_color"],
-                label="Total time (min)"
-            )
+            self._plot_daily_metrics(ax_time, positions, daily_dates, daily_stats, (
+                (daily_speed, "Average letters/min"),
+                (daily_error, "Average error %"),
+                (daily_duration_minutes, "Total time (min)"),
+            ), palette)
             formatted_days = [day.strftime("%Y-%m-%d") for day in daily_dates]
             ax_time.set_xticks(positions)
             ax_time.set_xticklabels(
@@ -1492,10 +1456,7 @@ class PlotMixin:
                 rotation=45,
                 ha="right"
             )
-            ax_time.set_ylabel("Daily averages / total time")
             ax_time.set_title("Daily averages (letters/min vs error %)")
-            legend = ax_time.legend()
-            self._style_legend(legend, palette)
 
             cumulative_duration_minutes: List[float] = []
             running_total = 0.0
@@ -1503,10 +1464,10 @@ class PlotMixin:
                 running_total += minutes
                 cumulative_duration_minutes.append(running_total)
 
-            ax_time_spent.bar(
+            ax_time_spent.plot(
                 positions,
                 daily_duration_minutes,
-                width=0.4,
+                marker="o",
                 color=palette["time_per_day_bar_color"],
                 label="Time per day (min)"
             )
@@ -1568,8 +1529,8 @@ class PlotMixin:
         ax_time_spent_right.yaxis.set_major_formatter(formatter)
 
         self._apply_plot_theme(fig, palette)
-        plt.tight_layout(pad=1.3)
-        plt.show()
+        fig.subplots_adjust(top=0.94, bottom=0.04, left=0.1, right=0.76)
+        self._show_statistics_report(fig, [self.letter_stats_file_path], "Letters per minute")
 
     def show_special_stats(self) -> None:
         """
@@ -1692,8 +1653,7 @@ class PlotMixin:
                 current_day += timedelta(days=1)
 
         palette = self._get_plot_palette()
-        fig = plt.figure(figsize=(12, 10))
-        self._configure_figure_window(fig)
+        fig = Figure(figsize=(11, 22))
         grid_spec = fig.add_gridspec(4, 2, height_ratios=[1.0, 1.2, 1.0, 0.8])
         grid_spec.update(hspace=0.75, wspace=0.4)
 
@@ -1753,28 +1713,11 @@ class PlotMixin:
 
         if daily_dates:
             positions = np.arange(len(daily_dates))
-            bar_width = 0.25
-            ax_time.bar(
-                positions - bar_width,
-                daily_speed,
-                width=bar_width,
-                color=palette["daily_speed_color"],
-                label="Average special chars/min"
-            )
-            ax_time.bar(
-                positions,
-                daily_error,
-                width=bar_width,
-                color=palette["daily_error_color"],
-                label="Average error %"
-            )
-            ax_time.bar(
-                positions + bar_width,
-                daily_duration_minutes,
-                width=bar_width,
-                color=palette["daily_duration_color"],
-                label="Total time (min)"
-            )
+            self._plot_daily_metrics(ax_time, positions, daily_dates, daily_stats, (
+                (daily_speed, "Average special chars/min"),
+                (daily_error, "Average error %"),
+                (daily_duration_minutes, "Total time (min)"),
+            ), palette)
             formatted_days = [day.strftime("%Y-%m-%d") for day in daily_dates]
             ax_time.set_xticks(positions)
             ax_time.set_xticklabels(
@@ -1782,10 +1725,7 @@ class PlotMixin:
                 rotation=45,
                 ha="right"
             )
-            ax_time.set_ylabel("Daily averages / total time")
             ax_time.set_title("Daily averages (special chars/min vs error %)")
-            legend = ax_time.legend()
-            self._style_legend(legend, palette)
 
             cumulative_duration_minutes: List[float] = []
             running_total = 0.0
@@ -1793,10 +1733,10 @@ class PlotMixin:
                 running_total += minutes
                 cumulative_duration_minutes.append(running_total)
 
-            ax_time_spent.bar(
+            ax_time_spent.plot(
                 positions,
                 daily_duration_minutes,
-                width=0.4,
+                marker="o",
                 color=palette["time_per_day_bar_color"],
                 label="Time per day (min)"
             )
@@ -1858,8 +1798,8 @@ class PlotMixin:
         ax_time_spent_right.yaxis.set_major_formatter(formatter)
 
         self._apply_plot_theme(fig, palette)
-        plt.tight_layout(pad=1.3)
-        plt.show()
+        fig.subplots_adjust(top=0.94, bottom=0.04, left=0.1, right=0.76)
+        self._show_statistics_report(fig, [self.special_stats_file_path], "Symbols per minute")
 
     def show_number_stats(self) -> None:
         """
@@ -1982,8 +1922,7 @@ class PlotMixin:
                 current_day += timedelta(days=1)
 
         palette = self._get_plot_palette()
-        fig = plt.figure(figsize=(12, 10))
-        self._configure_figure_window(fig)
+        fig = Figure(figsize=(11, 22))
         grid_spec = fig.add_gridspec(4, 2, height_ratios=[1.0, 1.2, 1.0, 0.8])
         grid_spec.update(hspace=0.75, wspace=0.4)
 
@@ -2043,28 +1982,11 @@ class PlotMixin:
 
         if daily_dates:
             positions = np.arange(len(daily_dates))
-            bar_width = 0.25
-            ax_time.bar(
-                positions - bar_width,
-                daily_speed,
-                width=bar_width,
-                color=palette["daily_speed_color"],
-                label="Average digits/min"
-            )
-            ax_time.bar(
-                positions,
-                daily_error,
-                width=bar_width,
-                color=palette["daily_error_color"],
-                label="Average error %"
-            )
-            ax_time.bar(
-                positions + bar_width,
-                daily_duration_minutes,
-                width=bar_width,
-                color=palette["daily_duration_color"],
-                label="Total time (min)"
-            )
+            self._plot_daily_metrics(ax_time, positions, daily_dates, daily_stats, (
+                (daily_speed, "Average digits/min"),
+                (daily_error, "Average error %"),
+                (daily_duration_minutes, "Total time (min)"),
+            ), palette)
             formatted_days = [day.strftime("%Y-%m-%d") for day in daily_dates]
             ax_time.set_xticks(positions)
             ax_time.set_xticklabels(
@@ -2072,10 +1994,7 @@ class PlotMixin:
                 rotation=45,
                 ha="right"
             )
-            ax_time.set_ylabel("Daily averages / total time")
             ax_time.set_title("Daily averages (digits/min vs error %)")
-            legend = ax_time.legend()
-            self._style_legend(legend, palette)
 
             cumulative_duration_minutes: List[float] = []
             running_total = 0.0
@@ -2083,10 +2002,10 @@ class PlotMixin:
                 running_total += minutes
                 cumulative_duration_minutes.append(running_total)
 
-            ax_time_spent.bar(
+            ax_time_spent.plot(
                 positions,
                 daily_duration_minutes,
-                width=0.4,
+                marker="o",
                 color=palette["time_per_day_bar_color"],
                 label="Time per day (min)"
             )
@@ -2148,8 +2067,8 @@ class PlotMixin:
         ax_time_spent_right.yaxis.set_major_formatter(formatter)
 
         self._apply_plot_theme(fig, palette)
-        plt.tight_layout(pad=1.3)
-        plt.show()
+        fig.subplots_adjust(top=0.94, bottom=0.04, left=0.1, right=0.76)
+        self._show_statistics_report(fig, [self.number_stats_file_path], "Digits per minute")
 
     def show_general_stats(self) -> None:
         """
@@ -2425,7 +2344,7 @@ class PlotMixin:
             }
 
         palette = self._get_plot_palette()
-        fig = plt.figure(figsize=(14, 10.2))
+        fig = Figure(figsize=(11, 19))
         gridspec = fig.add_gridspec(
             3,
             2,
@@ -2438,7 +2357,6 @@ class PlotMixin:
         ax_modes = fig.add_subplot(gridspec[2, 0])
         ax_training = fig.add_subplot(gridspec[2, 1])
         ax_cumulative = ax_time_spent.twinx()
-        self._configure_figure_window(fig)
         cmap = mcolors.LinearSegmentedColormap.from_list(
             "time_heatmap",
             [
@@ -2555,10 +2473,10 @@ class PlotMixin:
             ax_time_spent.clear()
             ax_cumulative.clear()
             month_positions = np.arange(len(view_data["monthly_minutes"]))
-            ax_time_spent.bar(
+            ax_time_spent.plot(
                 month_positions,
                 view_data["monthly_minutes"],
-                width=0.5,
+                marker="o",
                 color=palette["time_per_day_bar_color"],
                 label="Time per month (min)"
             )
@@ -2736,4 +2654,4 @@ class PlotMixin:
         button_next.on_clicked(lambda _event: _shift_year(-1))
 
         fig.subplots_adjust(top=0.94, bottom=0.02, left=0.05, right=0.82)
-        plt.show()
+        self._show_statistics_report(fig, [], "Overview")

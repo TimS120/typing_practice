@@ -22,8 +22,10 @@ SPECIAL_STATS_FILE_NAME = "special_character_stats.csv"
 NUMBER_STATS_FILE_NAME = "number_stats.csv"
 TRAINING_FLAG_COLUMN = "is_training_run"
 END_ERROR_PERCENTAGE_COLUMN = "end_error_percentage"
+TEXT_CONTEXT_COLUMNS = ";language;text_id;text_characters;previous_completions"
 STATS_FILE_HEADER = (
     f"timestamp;wpm;error_percentage;duration_seconds;{TRAINING_FLAG_COLUMN}"
+    + TEXT_CONTEXT_COLUMNS
 )
 LETTER_STATS_FILE_HEADER = (
     "timestamp;letters_per_minute;error_percentage;"
@@ -44,6 +46,7 @@ SUDDEN_DEATH_NUMBER_STATS_FILE_NAME = "sudden_death_number_stats.csv"
 SUDDEN_DEATH_TYPING_STATS_FILE_HEADER = (
     "timestamp;wpm;correct_characters;duration_seconds;"
     f"completed;{TRAINING_FLAG_COLUMN}"
+    + TEXT_CONTEXT_COLUMNS
 )
 SUDDEN_DEATH_LETTER_STATS_FILE_HEADER = (
     "timestamp;letters_per_minute;correct_letters;duration_seconds;"
@@ -64,6 +67,7 @@ BLIND_NUMBER_STATS_FILE_NAME = "blind_number_stats.csv"
 BLIND_TYPING_STATS_FILE_HEADER = (
     "timestamp;wpm;typed_characters;duration_seconds;completed;"
     f"{END_ERROR_PERCENTAGE_COLUMN};{TRAINING_FLAG_COLUMN}"
+    + TEXT_CONTEXT_COLUMNS
 )
 BLIND_LETTER_STATS_FILE_HEADER = (
     "timestamp;letters_per_minute;typed_letters;duration_seconds;completed;"
@@ -201,7 +205,11 @@ def ensure_stats_file_header(path: Path, header: str, create_if_missing: bool = 
             write_encrypted(path, header + "\n")
         return
     content = read_encrypted(path)
-    if content.splitlines()[:1] != [header]:
+    first_line = content.splitlines()[:1]
+    if first_line != [header]:
+        if first_line and header.startswith(first_line[0] + ";"):
+            # Extend a known CSV schema without turning its old header into data.
+            content = content.partition("\n")[2]
         write_encrypted(path, header + "\n" + content)
 
 

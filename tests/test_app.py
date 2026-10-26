@@ -140,13 +140,15 @@ class StorageTests(TemporaryData, unittest.TestCase):
                 continue
             path = io_utils.get__file_path(name + ".csv")
             arguments = {key: (path if key == "file_path" else True if key in ("completed", "is_training_run") else 10)
-                         for key in inspect.signature(function).parameters}
+                         for key, parameter in inspect.signature(function).parameters.items()
+                         if parameter.default is inspect.Parameter.empty}
             function(**arguments)
             function(**arguments)
             with io_utils.open_encrypted_stats(path) as stream:
                 rows = stream.read().splitlines()
             self.assertEqual(len(rows), 3, name)
-            self.assertEqual(rows[1].split(";")[-1], "1")
+            flag_index = rows[0].split(";").index("is_training_run")
+            self.assertEqual(rows[1].split(";")[flag_index], "1")
             self.assertNotIn(rows[1].encode(), path.read_bytes())
         self.assertEqual(len(list(io_utils.get_data_dir().glob("*.enc"))), 12)
 
@@ -826,7 +828,8 @@ class GuiTests(TemporaryData, unittest.TestCase):
             writer = getattr(backend, name)
             arguments = {key: (path if key == "file_path" else False if key == "is_training_run"
                                else True if key == "completed" else 10)
-                         for key in inspect.signature(writer).parameters}
+                         for key, parameter in inspect.signature(writer).parameters.items()
+                         if parameter.default is inspect.Parameter.empty}
             writer(**arguments)
         with patch.object(plt, "show"), patch("tkinter.messagebox.showinfo"):
             for mode in ("Standard", "Sudden death", "Blind mode"):
@@ -834,6 +837,17 @@ class GuiTests(TemporaryData, unittest.TestCase):
                 for show in (self.app.show_stats, self.app.show_letter_stats,
                              self.app.show_special_stats, self.app.show_number_stats, self.app.show_general_stats):
                     show()
+                    figure = self.app._statistics_report.figures[0]
+                    for axis in figure.axes:
+                        if axis.get_title().startswith("Daily averages"):
+                            siblings = axis.get_shared_x_axes().get_siblings(axis)
+                            self.assertEqual(len(siblings), 3)
+                            self.assertEqual(len({a.get_ylabel() for a in siblings}), 3)
+                            self.assertTrue(all(len(a.lines) == 1 and not a.patches for a in siblings))
+                        elif axis.get_title().startswith(("Time spent per day", "Time spent progression")):
+                            siblings = axis.get_shared_x_axes().get_siblings(axis)
+                            self.assertEqual(len(siblings), 2)
+                            self.assertTrue(all(len(a.lines) == 1 and not a.patches for a in siblings))
                     plt.close("all")
         self.mock_error.assert_not_called()
 

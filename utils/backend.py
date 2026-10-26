@@ -7,6 +7,8 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+from .statistics_data import text_context
+
 from .io_utils import (
     BLIND_LETTER_STATS_FILE_HEADER,
     BLIND_SPECIAL_STATS_FILE_HEADER,
@@ -64,6 +66,8 @@ def save_wpm_result(
     error_percentage: float,
     duration_seconds: float,
     is_training_run: bool,
+    *,
+    text_details: dict | None = None,
 ) -> None:
     """
     Append the given WPM value and error rate to the statistics file.
@@ -74,6 +78,7 @@ def save_wpm_result(
         f"{timestamp};{wpm:.3f};{error_percentage:.3f};"
         f"{duration_seconds:.3f};{training_flag}\n"
     )
+    line = line.rstrip("\n") + text_context(file_path, text_details) + "\n"
     ensure_stats_file_header(file_path, STATS_FILE_HEADER)
     with open_encrypted_stats(file_path, "a") as stats_file:
         stats_file.write(line)
@@ -86,6 +91,8 @@ def save_sudden_death_wpm_result(
     duration_seconds: float,
     completed: bool,
     is_training_run: bool,
+    *,
+    text_details: dict | None = None,
 ) -> None:
     """
     Store sudden death typing results with the number of correct characters.
@@ -97,6 +104,7 @@ def save_sudden_death_wpm_result(
         f"{timestamp};{wpm:.3f};{correct_characters};"
         f"{duration_seconds:.3f};{completed_flag};{training_flag}\n"
     )
+    line = line.rstrip("\n") + text_context(file_path, text_details) + "\n"
     ensure_stats_file_header(file_path, SUDDEN_DEATH_TYPING_STATS_FILE_HEADER)
     with open_encrypted_stats(file_path, "a") as stats_file:
         stats_file.write(line)
@@ -242,6 +250,8 @@ def save_blind_typing_result(
     completed: bool,
     end_error_percentage: float,
     is_training_run: bool,
+    *,
+    text_details: dict | None = None,
 ) -> None:
     """
     Store blind mode typing results with the final error percentage.
@@ -253,6 +263,7 @@ def save_blind_typing_result(
         f"{timestamp};{wpm:.3f};{typed_characters};{duration_seconds:.3f};"
         f"{completed_flag};{end_error_percentage:.3f};{training_flag}\n"
     )
+    line = line.rstrip("\n") + text_context(file_path, text_details) + "\n"
     ensure_stats_file_header(file_path, BLIND_TYPING_STATS_FILE_HEADER)
     with open_encrypted_stats(file_path, "a") as stats_file:
         stats_file.write(line)

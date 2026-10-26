@@ -713,7 +713,7 @@ class TypingTrainerApp(PlotMixin):
                                                 values=[label for _, label in STATS_FILTER_OPTIONS],
                                                 width=18, font=self.ui_font)
         self.stats_filter_combobox.pack(side="left")
-        intro = ttk.Label(page, text="Choose a chart to review your practice. Filters affect the saved results, not your next exercise.",
+        intro = ttk.Label(page, text="Choose a scrollable report with clickable chapters to review your practice. Filters affect the saved results, not your next exercise.",
                           wraplength=900)
         intro.grid(row=1, column=0, sticky="w", pady=(0, 14))
         cards = ttk.Frame(page)
@@ -732,7 +732,7 @@ class TypingTrainerApp(PlotMixin):
             label = ttk.Label(card, text=description, wraplength=400)
             label.pack(anchor="w", pady=(0, 8))
             card_contents.append((card, label))
-            ttk.Button(card, text="Open chart", command=command).pack(anchor="w")
+            ttk.Button(card, text="Open report", command=command).pack(anchor="w")
 
         def resize_statistics(event):
             self.stats_canvas.itemconfigure(content, width=event.width)
@@ -1031,6 +1031,9 @@ class TypingTrainerApp(PlotMixin):
         for job in (self._theme_job, self._settings_job, self._title_bar_refresh_job, self.update_job_id, self._generation_job):
             if job is not None:
                 self.master.after_cancel(job)
+        report = getattr(self, "_statistics_report", None)
+        if report is not None and report.window.winfo_exists():
+            report.close()
         self._theme_executor.shutdown(wait=False, cancel_futures=True)
         self.master.destroy()
 
@@ -3289,7 +3292,8 @@ class TypingTrainerApp(PlotMixin):
                 safe_index,
                 elapsed_seconds,
                 completed=False,
-                is_training_run=self.training_run_var.get()
+                is_training_run=self.training_run_var.get(),
+                text_details={"text": self.target_text, "language": self._loaded_typing_language}
             )
 
         self.info_text_var.set(
@@ -3315,7 +3319,8 @@ class TypingTrainerApp(PlotMixin):
                 duration_seconds=elapsed_seconds,
                 completed=False,
                 end_error_percentage=blind_end_error_percentage or 0.0,
-                is_training_run=self.training_run_var.get()
+                is_training_run=self.training_run_var.get(),
+                text_details={"text": self.target_text, "language": self._loaded_typing_language}
             )
         self._finish_analysis(self.target_text[:min(safe_index + 1, len(self.target_text))], False, True)
 
@@ -3411,7 +3416,8 @@ class TypingTrainerApp(PlotMixin):
                     target_length,
                     elapsed_seconds,
                     completed=True,
-                    is_training_run=self.training_run_var.get()
+                    is_training_run=self.training_run_var.get(),
+                    text_details={"text": self.target_text, "language": self._loaded_typing_language}
                 )
             self.info_text_var.set(
                 "Sudden death complete. Start another run when ready."
@@ -3435,7 +3441,8 @@ class TypingTrainerApp(PlotMixin):
                     duration_seconds=elapsed_seconds,
                     completed=True,
                     end_error_percentage=end_error_percentage or 0.0,
-                    is_training_run=self.training_run_var.get()
+                    is_training_run=self.training_run_var.get(),
+                    text_details={"text": self.target_text, "language": self._loaded_typing_language}
                 )
         else:
             if not self.is_blind_mode_active():
@@ -3444,7 +3451,8 @@ class TypingTrainerApp(PlotMixin):
                     wpm,
                     error_percentage,
                     elapsed_seconds,
-                    self.training_run_var.get()
+                    self.training_run_var.get(),
+                    text_details={"text": self.target_text, "language": self._loaded_typing_language}
                 )
             if self.is_blind_mode_active():
                 self._show_blind_final_text(final_typed_text)
@@ -3455,7 +3463,8 @@ class TypingTrainerApp(PlotMixin):
                     duration_seconds=elapsed_seconds,
                     completed=True,
                     end_error_percentage=end_error_percentage or 0.0,
-                    is_training_run=self.training_run_var.get()
+                    is_training_run=self.training_run_var.get(),
+                    text_details={"text": self.target_text, "language": self._loaded_typing_language}
                 )
 
             if self.is_blind_mode_active():
