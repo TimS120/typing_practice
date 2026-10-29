@@ -451,7 +451,7 @@ class GuiTests(TemporaryData, unittest.TestCase):
             manager.body.insert("1.0", text)
         manager.move(-1)
         self.assertTrue(manager.save())
-        self.assertEqual(self.app.text_listbox.get(0), "01  Second")
+        self.assertEqual(self.app.text_listbox.get(0), "01  Second [Ger]")
         self.app._load_text_from_index(1)
         self.assertEqual(self.app.target_text, " leading\t\n\ntrailing  \n")
         self.assertEqual(io_utils.load_or_create_texts(io_utils.get__file_path(io_utils.TEXT_FILE_NAME)), manager.entries)
@@ -532,7 +532,7 @@ class GuiTests(TemporaryData, unittest.TestCase):
         self.assertEqual(self.app.theme_var.get(), "Dark")
         self.assertEqual((self.root.winfo_width(), self.root.winfo_height()), (1100, 640))
         self.assertFalse(self.app.training_run_var.get())
-        self.assertEqual(set(io_utils.load_settings()), {"theme", "font_size", "ui_font_size", "window_size",
+        self.assertEqual(set(io_utils.load_settings()), {"app_language", "typing_library_width", "theme", "font_size", "ui_font_size", "window_size",
                                                          "keyboard_layout", "custom_characters", "coverage_threshold", "generation_language", "analysis_history", "analysis_minimum"})
 
     def test_layout_separates_practice_manager_and_statistics(self):
@@ -616,7 +616,7 @@ class GuiTests(TemporaryData, unittest.TestCase):
         self.app.app_tabs.select(self.app.practice_page)
         self.root.update()
         self.assertEqual(self.app.text_listbox.curselection(), (0,))
-        self.assertEqual(self.app.text_listbox.get(0), "01  Renamed")
+        self.assertEqual(self.app.text_listbox.get(0), "01  Renamed [Ger]")
         self.assertEqual(self.app.target_text, updated)
         self.assertEqual(self.app.display_text.get("1.0", "end-1c"), updated)
         self.assertEqual(self.app._loaded_typing_language, "German")
@@ -636,8 +636,8 @@ class GuiTests(TemporaryData, unittest.TestCase):
         self.assertTrue(manager.save())
         self.app.app_tabs.select(self.app.practice_page)
         self.root.update()
-        self.assertEqual(self.app.target_text, "")
-        self.assertEqual(self.app.text_listbox.curselection(), ())
+        self.assertEqual(self.app.target_text, "First passage")
+        self.assertEqual(self.app.text_listbox.curselection(), (0,))
 
     def test_text_manager_drafts_survive_navigation(self):
         self.app.open_text_manager()
@@ -666,6 +666,197 @@ class GuiTests(TemporaryData, unittest.TestCase):
             self.assertEqual(show.call_args.kwargs["file_path"], self.app.blind_number_stats_file_path)
         self.assertEqual(self.app.sudden_death_mode_var.get(), "Standard")
         self.assertTrue(self.app.is_number_mode)
+
+    def test_loaded_text_selects_manager_entry_without_losing_draft(self):
+        manager = self.app.text_manager
+        for name, language in (("First", "English"), ("Second", "German")):
+            manager.add()
+            manager.name_var.set(name)
+            manager.language_var.set(language)
+            manager.body.insert("1.0", name + " passage")
+        self.assertTrue(manager.save())
+        self.app._load_text_from_index(1)
+        self.root.update()
+        self.assertEqual(self.app.text_listbox.get(1), "02  Second [Ger]")
+        manager.show_entry(0)
+        manager.body.insert("end", " draft")
+        self.root.update()
+        self.app.open_text_manager()
+        self.root.update()
+        self.assertEqual(manager.index, 1)
+        self.assertEqual(manager.listbox.curselection(), (1,))
+        self.assertEqual(manager.entries[0]["text"], "First passage draft")
+
+    def test_initial_manager_selection_loads_when_returning_to_typing(self):
+        self.app.close()
+        import tkinter as tk
+        from utils.ui_utils import TypingTrainerApp
+        self.root = tk.Tk()
+        self.app = TypingTrainerApp(self.root, [{"name": "First", "text": "Hello", "language": "English"}])
+        self.root.update()
+        self.assertEqual(self.app.target_text, "")
+        self.app.open_text_manager()
+        self.root.update()
+        self.assertEqual(self.app.text_manager.index, 0)
+        self.app.app_tabs.select(self.app.practice_page)
+        self.root.update()
+        self.assertEqual(self.app.target_text, "Hello")
+        self.assertEqual(self.app.text_listbox.curselection(), (0,))
+
+    def test_manager_selection_loads_saved_passage_and_keeps_draft(self):
+        manager = self.app.text_manager
+        self.app.open_text_manager()
+        self.root.update()
+        for name in ("First", "Second", "Third"):
+            manager.add()
+            manager.name_var.set(name)
+            manager.language_var.set("English")
+            manager.body.insert("1.0", name + " saved")
+        self.assertTrue(manager.save())
+        self.app._load_text_from_index(0)
+        self.root.update()
+        self.app.open_text_manager()
+        self.root.update()
+        manager.listbox.selection_clear(0, "end")
+        manager.listbox.selection_set(2)
+        manager.listbox.event_generate("<<ListboxSelect>>")
+        self.root.update()
+        manager.body.insert("end", " unsaved")
+        self.root.update()
+        manager.move(-1)
+        self.app.app_tabs.select(self.app.practice_page)
+        self.root.update()
+        self.assertEqual(self.app._loaded_typing_index, 2)
+        self.assertEqual(self.app.text_listbox.curselection(), (2,))
+        self.assertEqual(self.app.target_text, "Third saved")
+        self.app.open_text_manager()
+        self.root.update()
+        self.assertEqual(manager.index, 1)
+        self.assertEqual(manager.body.get("1.0", "end-1c"), "Third saved unsaved")
+        manager.add()
+        manager.name_var.set("New draft")
+        manager.language_var.set("German")
+        manager.body.insert("1.0", "New saved passage")
+        self.app.app_tabs.select(self.app.practice_page)
+        self.root.update()
+        self.assertEqual(self.app.target_text, "Third saved")
+        self.app.open_text_manager()
+        self.root.update()
+        self.assertEqual(manager.name_var.get(), "New draft")
+        self.assertTrue(manager.save())
+        self.app.app_tabs.select(self.app.practice_page)
+        self.root.update()
+        self.assertEqual(self.app.target_text, "New saved passage")
+        self.assertEqual(self.app.text_listbox.curselection(), (3,))
+
+    def test_text_language_abbreviations_follow_app_language(self):
+        self.app.text_entries = [{"name": "German", "text": "Hallo", "language": "German"},
+                                 {"name": "English", "text": "Hello", "language": "English"}]
+        self.app.app_language_var.set("en")
+        self.app.change_app_language()
+        self.assertEqual(self.app.text_listbox.get(0), "01  German [Ger]")
+        self.assertEqual(self.app.text_listbox.get(1), "02  English [Eng]")
+        self.app.app_language_var.set("de")
+        self.app.change_app_language()
+        self.assertEqual(self.app.text_listbox.get(0), "01  German [Deu]")
+        self.assertEqual(self.app.text_listbox.get(1), "02  English [Eng]")
+        with patch.dict(os.environ, {"LANG": "de_DE.UTF-8"}, clear=True):
+            self.app.app_language_var.set("system")
+            self.app.change_app_language()
+            self.assertEqual(self.app.text_listbox.get(0), "01  German [Deu]")
+
+    def test_library_width_is_saved_and_restored_after_restart(self):
+        panes = self.app.typing_panes
+        original = panes.sashpos(0)
+        panes.event_generate("<ButtonPress-1>", x=original, y=20)
+        panes.event_generate("<B1-Motion>", x=original + 80, y=20)
+        panes.event_generate("<ButtonRelease-1>", x=original + 80, y=20)
+        self.root.update()
+        expected = panes.sashpos(0)
+        self.assertGreater(expected, original)
+        self.assertEqual(io_utils.load_settings()["typing_library_width"], expected)
+        self.app.app_tabs.select(self.app.settings_page)
+        self.root.update()
+        self.app.close()
+        import tkinter as tk
+        from utils.ui_utils import TypingTrainerApp
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.app = TypingTrainerApp(self.root, [])
+        self.root.update_idletasks()
+        self.root.deiconify()
+        self.root.update()
+        self.assertEqual(self.app.typing_panes.sashpos(0), expected)
+
+    def test_language_setting_is_first_and_uses_theme_radio_style(self):
+        from tkinter import ttk
+        page = self.app.settings_canvas.nametowidget(self.app.settings_canvas.itemcget(1, "window"))
+        groups = [child for child in page.winfo_children() if isinstance(child, ttk.LabelFrame)]
+        language = next(group for group in groups if group.cget("text") == "App language")
+        theme = next(group for group in groups if group.cget("text") == "Theme")
+        self.assertLess(int(language.grid_info()["row"]), int(theme.grid_info()["row"]))
+        language_radios = [child for container in language.winfo_children() for child in container.winfo_children()
+                           if isinstance(child, ttk.Radiobutton)]
+        theme_radios = [child for container in theme.winfo_children() for child in container.winfo_children()
+                        if isinstance(child, ttk.Radiobutton)]
+        self.assertEqual(len(language_radios), 3)
+        self.assertEqual({radio.cget("style") for radio in language_radios},
+                         {radio.cget("style") for radio in theme_radios})
+
+    def test_typing_library_divider_resizes_input_area(self):
+        self.root.update()
+        panes = self.app.typing_panes
+        original_sash = panes.sashpos(0)
+        original_width = self.app.input_text.winfo_width()
+        panes.sashpos(0, original_sash + 90)
+        self.root.update()
+        self.assertGreater(panes.sashpos(0), original_sash)
+        self.assertLess(self.app.input_text.winfo_width(), original_width)
+
+    def test_app_language_switch_preserves_mode_values_and_preferences(self):
+        from utils.i18n import effective_language
+        self.assertEqual(effective_language("system", "de_DE"), "de")
+        self.assertEqual(effective_language("system", "en_US"), "en")
+        with patch.dict(os.environ, {"LANG": "de_DE.UTF-8"}, clear=True):
+            self.assertEqual(effective_language("system"), "de")
+        with patch.dict(os.environ, {"LANGUAGE": "en_US:de", "LANG": "de_DE.UTF-8"}, clear=True):
+            self.assertEqual(effective_language("system"), "en")
+        manager = self.app.text_manager
+        manager.add()
+        manager.name_var.set("Sample")
+        manager.language_var.set("English")
+        manager.body.insert("1.0", "Sample passage")
+        self.assertTrue(manager.save())
+        self.app.app_language_var.set("de")
+        self.app.change_app_language()
+        self.root.update()
+        self.assertIn("[Englisch]", manager.listbox.get(0))
+        self.assertEqual(manager.language_var.get(), "English")
+        self.assertEqual(manager.language_entry.get(), "Englisch")
+        self.assertEqual(self.app.app_tabs.tab(self.app.practice_page, "text"), "Tippen")
+        self.assertIn("Blindmodus", self.app.sudden_death_mode_combobox.cget("values"))
+        self.app.sudden_death_mode_combobox.current(2)
+        self.app.sudden_death_mode_combobox.event_generate("<<ComboboxSelected>>")
+        self.root.update()
+        self.assertEqual(self.app.sudden_death_mode_var.get(), "Blind mode")
+        self.assertTrue(self.app.is_blind_mode_active())
+        self.assertEqual(io_utils.load_settings()["app_language"], "de")
+        self.app.app_language_var.set("en")
+        self.app.change_app_language()
+        self.root.update()
+        self.assertEqual(self.app.app_tabs.tab(self.app.practice_page, "text"), "Typing")
+        self.assertEqual(self.app.sudden_death_mode_var.get(), "Blind mode")
+        self.assertEqual(self.app.sudden_death_mode_combobox.get(), "Blind mode")
+        self.app.app_language_var.set("de")
+        self.app.change_app_language()
+        self.app.close()
+        import tkinter as tk
+        from utils.ui_utils import TypingTrainerApp
+        self.root = tk.Tk()
+        self.app = TypingTrainerApp(self.root, [])
+        self.root.update()
+        self.assertEqual(self.app.app_language_var.get(), "de")
+        self.assertEqual(self.app.app_tabs.tab(self.app.practice_page, "text"), "Tippen")
 
     def test_ui_text_size_is_independent_and_restored(self):
         self.app.change_ui_font_size(3)

@@ -115,6 +115,18 @@ class ContextTests(ResultsFixture, unittest.TestCase):
         self.assertTrue(trend(ax, [1, 2, 3, 4], [3, 5, 7, float("nan")]))
         np.testing.assert_allclose(ax.lines[-1].get_ydata(), [3, 7])
 
+    def test_latest_marker_uses_latest_filtered_session_and_missing_metadata(self):
+        backend.save_wpm_result(self.standard, 30, 3, 20, False, text_details=self.details)
+        backend.save_wpm_result(self.standard, 60, 2, 20, False, text_details=self.details)
+        backend.save_wpm_result(self.standard, 99, 1, 20, True, text_details=self.details)
+        app = SimpleNamespace(_should_include_training_entry=lambda training: not training)
+        figures = context_figures(app, [self.standard], "WPM")
+        for fig in figures:
+            markers = [item for item in fig.axes[0].collections if item.get_label() == "Latest session"]
+            self.assertEqual(len(markers), 1, fig.axes[0].get_title())
+        self.assertEqual(float(figures[0].axes[0].collections[1].get_offsets()[0][1]), 60)
+        self.assertEqual(float(figures[1].axes[0].collections[1].get_offsets()[0][1]), 2)
+
     def test_context_charts_follow_run_filter_and_do_not_invent_old_metadata(self):
         backend.save_wpm_result(self.standard, 50, 0, 20, False, text_details=self.details)
         backend.save_wpm_result(self.standard, 500, 0, 20, True, text_details=self.details)
@@ -153,6 +165,15 @@ class ReportGuiTests(ResultsFixture, unittest.TestCase):
         self.root.update()
         report = self.app._statistics_report
         self.assertEqual(len(report.figures), 6)
+        axes = report.figures[0].axes
+        histogram = next(axis for axis in axes if axis.get_title() == "WPM distribution")
+        self.assertTrue(any(line.get_label() == "Latest session" for line in histogram.lines))
+        joint = next(axis for axis in axes if axis.get_title().startswith("Joint WPM"))
+        self.assertTrue(any(item.get_label() == "Latest session" for item in joint.collections))
+        daily = next(axis for axis in axes if axis.get_title().startswith("Daily averages"))
+        self.assertEqual(sum(item.get_label() == "Latest session (individual)"
+                             for axis in daily.get_shared_x_axes().get_siblings(daily)
+                             for item in axis.collections), 3)
         self.assertEqual(len(report.chapters), 9)
         dividers = [artist for figure in report.figures for artist in figure.artists
                     if artist.get_gid() == "chapter-divider"]
@@ -171,6 +192,22 @@ class ReportGuiTests(ResultsFixture, unittest.TestCase):
         self.app.show_stats()
         self.root.update()
         self.assertFalse(report.window.winfo_exists())
+
+    def test_report_translates_and_restores_chart_titles(self):
+        backend.save_wpm_result(self.standard, 50, 1, 20, False, text_details=self.details)
+        self.app.show_stats()
+        self.root.update()
+        report = self.app._statistics_report
+        self.app.app_language_var.set("de")
+        self.app.change_app_language()
+        self.root.update()
+        self.assertEqual(report.figures[0].axes[0].get_title(), "WPM-Verteilung")
+        self.assertEqual(report.figures[0].axes[0].get_xlabel(), "Wörter pro Minute")
+        self.app.app_language_var.set("en")
+        self.app.change_app_language()
+        self.root.update()
+        self.assertEqual(report.figures[0].axes[0].get_title(), "WPM distribution")
+        self.assertEqual(report.figures[0].axes[0].get_xlabel(), "Words per minute")
 
     def test_typing_records_context_in_all_modes_without_unfinished_results(self):
         for mode, path in (("Standard", self.standard), ("Sudden death", self.sudden), ("Blind mode", self.blind)):

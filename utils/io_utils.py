@@ -222,8 +222,13 @@ def load_settings() -> dict:
     if not isinstance(settings, dict):
         return {}
     result = {}
+    if settings.get("app_language") in ("system", "de", "en"):
+        result["app_language"] = settings["app_language"]
     if settings.get("theme") in ("system", "light", "dark"):
         result["theme"] = settings["theme"]
+    library_width = settings.get("typing_library_width")
+    if type(library_width) is int and 1 <= library_width <= 10000:
+        result["typing_library_width"] = library_width
     size = settings.get("font_size")
     if type(size) is int and 6 <= size <= 48:
         result["font_size"] = size

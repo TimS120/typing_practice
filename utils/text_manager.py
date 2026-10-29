@@ -1,7 +1,8 @@
 """Manage an ordered text library while preserving the exact editable content."""
 import copy
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from .i18n import messagebox, translate, effective_language
 import unicodedata
 
 from .keyboard_layouts import character_coverage, character_label
@@ -36,6 +37,7 @@ class TextManager:
         self.saved_entries = copy.deepcopy(self.entries)
         # Track saved rows through draft renames, deletions and reordering.
         self.source_indices = list(range(len(self.entries)))
+        self.selection_pending = False
         self.coverage_window = None
         self.index = None
         self.drag_index = None
@@ -121,9 +123,11 @@ class TextManager:
     def entry_label(self, index):
         entry = self.entries[index]
         language = entry.get("language", "").strip()
+        ui_language = effective_language(self.app.app_language_var.get())
+        name = entry["name"] or translate("(unnamed)", ui_language)
         if language not in TEXT_LANGUAGES:
-            return f"{index + 1:02d}  [Language required] {entry['name'] or '(unnamed)'}"
-        return f"{index + 1:02d}  {entry['name'] or '(unnamed)'} [{language}]"
+            return f"{index + 1:02d}  [{translate('Language required', ui_language)}] {name}"
+        return f"{index + 1:02d}  {name} [{translate(language, ui_language)}]"
 
     def open_coverage(self):
         if self.coverage_window is not None and self.coverage_window.winfo_exists():
@@ -308,14 +312,17 @@ class TextManager:
 
     def select(self, event=None):
         selection = self.listbox.curselection()
-        if selection and selection[0] != self.index:
-            self.commit_editor()
-            self.show_entry(selection[0])
+        if selection:
+            self.selection_pending = True
+            if selection[0] != self.index:
+                self.commit_editor()
+                self.show_entry(selection[0])
 
     def add(self):
         self.commit_editor()
         self.entries.append({"name": "New text", "text": "", "language": ""})
         self.source_indices.append(None)
+        self.selection_pending = True
         self.show_entry(len(self.entries) - 1)
         self.status_var.set("Unsaved changes")
         self.name_entry.focus_set()
@@ -328,6 +335,7 @@ class TextManager:
             return
         self.entries.pop(self.index)
         self.source_indices.pop(self.index)
+        self.selection_pending = True
         self.show_entry(min(self.index, len(self.entries) - 1) if self.entries else None)
         self.status_var.set("Unsaved changes")
 
@@ -337,6 +345,7 @@ class TextManager:
         self.commit_editor()
         self.entries.insert(target, self.entries.pop(self.index))
         self.source_indices.insert(target, self.source_indices.pop(self.index))
+        self.selection_pending = True
         self.show_entry(target)
         self.status_var.set("Unsaved changes")
 
@@ -388,6 +397,7 @@ class TextManager:
             return
         self.entries = copy.deepcopy(self.saved_entries)
         self.source_indices = list(range(len(self.entries)))
+        self.selection_pending = True
         self.show_entry(0 if self.entries else None)
         self.status_var.set("Changes discarded")
 

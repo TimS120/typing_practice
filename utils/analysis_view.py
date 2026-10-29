@@ -2,7 +2,8 @@
 from collections import Counter
 from datetime import datetime
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from .i18n import messagebox, translate, effective_language
 
 from .keyboard_layouts import LAYOUTS, character_label
 from .mistake_analysis import HISTORY_RANGES, ERROR_LABELS, aggregate, category, filter_records, findings, load_analysis
@@ -161,6 +162,8 @@ class AnalysisView:
         def insert(key, *values):
             if self.session_record is not None and key in ("characters", "transitions"):
                 values = values[:-1]
+            language = effective_language(self.app.app_language_var.get())
+            values = tuple(translate(value, language) if isinstance(value, str) else value for value in values)
             self.tables[key].insert("", "end", values=values)
         categories = {}
         for char, values in sorted(self.data["characters"].items(), key=lambda row: (row[1]["opportunities"] < minimum, -row[1]["first_errors"] / row[1]["opportunities"], row[0])):

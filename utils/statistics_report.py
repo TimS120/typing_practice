@@ -5,7 +5,8 @@ from datetime import datetime
 import math
 import textwrap
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog
+from .i18n import messagebox
 
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.backends.backend_pdf import PdfPages
@@ -15,6 +16,7 @@ import numpy as np
 
 
 from .statistics_data import read_results, recover_languages
+from .i18n import translate
 
 
 def trend(ax, x, y, color=None):
@@ -78,6 +80,11 @@ def context_figures(app, paths, speed_label):
     if not rows:
         return []
     figures = []
+    latest_when, latest_speed, latest_row = rows[-1]
+
+    def highlight(ax, x, y):
+        ax.scatter([x], [y], s=55, color="red", edgecolors="white",
+                   linewidths=0.7, zorder=5, label="Latest session")
 
     def page(title, note):
         fig = Figure(figsize=(10, 4.5), layout="constrained")
@@ -94,7 +101,9 @@ def context_figures(app, paths, speed_label):
     x = date2num([r[0] for r in rows])
     y = [r[1] for r in rows]
     ax.scatter(x, y, s=18, label="Recorded session")
+    highlight(ax, x[-1], y[-1])
     trend(ax, x, y)
+    ax.legend()
     locator = AutoDateLocator()
     ax.xaxis.set_major_locator(locator)
     ax.xaxis.set_major_formatter(ConciseDateFormatter(locator))
@@ -122,7 +131,14 @@ def context_figures(app, paths, speed_label):
         ax.set_ylabel("Error (%)" if "error" in column else "Correct characters")
         x, y = zip(*observations)
         ax.scatter(x, y, s=18)
+        try:
+            latest_value = float(latest_row.get(column, ""))
+            if math.isfinite(latest_value) and latest_value >= 0:
+                highlight(ax, date2num(latest_when), latest_value)
+        except (TypeError, ValueError):
+            pass
         trend(ax, x, y)
+        ax.legend()
         locator = AutoDateLocator()
         ax.xaxis.set_major_locator(locator)
         ax.xaxis.set_major_formatter(ConciseDateFormatter(locator))
@@ -142,6 +158,9 @@ def context_figures(app, paths, speed_label):
     languages = sorted({r[2].get("language") or "Unknown" for r in rows})
     groups = [[r[1] for r in rows if (r[2].get("language") or "Unknown") == language] for language in languages]
     language_violins(ax, groups, [f"{language}\n(n={len(group)})" for language, group in zip(languages, groups)])
+    latest_language = latest_row.get("language") or "Unknown"
+    highlight(ax, languages.index(latest_language) + 1, latest_speed)
+    ax.legend()
     ax.set_xlabel("Text language")
     for column, title, label in (
         ("previous_completions", "Performance by previous text completions", "Previous completed runs of this exact text"),
@@ -159,12 +178,89 @@ def context_figures(app, paths, speed_label):
         if values:
             x, y = zip(*values)
             ax.scatter(x, y, s=22, alpha=.7)
+            try:
+                latest_value = int(latest_row.get(column, ""))
+                if latest_row.get("text_id") and latest_value >= 0:
+                    highlight(ax, latest_value, latest_speed)
+            except (TypeError, ValueError):
+                pass
             trend(ax, x, y)
+            if ax.get_legend_handles_labels()[0]:
+                ax.legend()
         else:
             ax.text(.5, .5, "No text context recorded yet. Complete a typing session to populate this chart.",
                     ha="center", va="center", wrap=True, transform=ax.transAxes)
         ax.set_xlabel(textwrap.fill(label, width=48))
     return figures
+
+
+def mark_latest_main_figure(fig, path, app):
+    """Add the latest individual run to charts whose data can represent it."""
+    rows = []
+    speed_columns = ("wpm", "letters_per_minute", "specials_per_minute", "symbols_per_minute", "digits_per_minute")
+    for row in read_results(path):
+        training = str(row.get("is_training_run", "")).lower() in ("1", "true", "yes", "y")
+        if not app._should_include_training_entry(training):
+            continue
+        try:
+            when = datetime.strptime(row["timestamp"], "%Y-%m-%d %H:%M:%S")
+            speed = float(next(row[column] for column in speed_columns if column in row))
+        except (KeyError, ValueError, TypeError, StopIteration):
+            continue
+        if math.isfinite(speed):
+            rows.append((when, speed, row))
+    if not rows:
+        return
+    when, speed, row = max(enumerate(rows), key=lambda item: (item[1][0], item[0]))[1]
+    metric = None
+    for column in ("error_percentage", "end_error_percentage", "correct_characters", "correct_letters", "correct_symbols", "correct_digits"):
+        try:
+            value = float(row.get(column, ""))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(value):
+            metric = value
+            break
+    try:
+        duration = float(row.get("duration_seconds", "")) / 60
+        if not math.isfinite(duration):
+            duration = None
+    except (TypeError, ValueError):
+        duration = None
+
+    distributions = [ax for ax in fig.axes if ax.get_title().lower().endswith(" distribution")]
+    for axis, value in zip(distributions[:2], (speed, metric)):
+        if value is not None:
+            axis.axvline(value, color="red", linestyle="--", linewidth=1.6, label="Latest session")
+            app._style_legend(axis.legend(fontsize=8), app._get_plot_palette())
+    for axis in fig.axes:
+        if axis.get_title().lower().startswith("joint ") and metric is not None:
+            axis.scatter([speed], [metric], color="red", edgecolors="white", s=55, zorder=5, label="Latest session")
+            app._style_legend(axis.legend(fontsize=8), app._get_plot_palette())
+        if not axis.get_title().startswith("Daily averages"):
+            continue
+        date_label = when.strftime("%Y-%m-%d")
+        positions = {tick.get_text(): position for tick, position in zip(axis.get_xticklabels(), axis.get_xticks())}
+        if date_label not in positions:
+            continue
+        siblings = axis.get_shared_x_axes().get_siblings(axis)
+        for sibling in siblings:
+            if not getattr(sibling, "_metric_color", None) or not sibling.lines:
+                continue
+            series_label = sibling.lines[0].get_label().lower()
+            value = duration if "time" in series_label else metric if ("error" in series_label or "correct" in series_label) else speed
+            if value is not None:
+                sibling.scatter([positions[date_label]], [value], color="red", edgecolors="white", s=45,
+                                zorder=5, label="Latest session (individual)")
+        handles, labels, seen = [], [], set()
+        for sibling in siblings:
+            for handle, label in zip(*sibling.get_legend_handles_labels()):
+                if label not in seen:
+                    handles.append(handle)
+                    labels.append(label)
+                    seen.add(label)
+        if handles:
+            app._style_legend(axis.legend(handles=handles, labels=labels, fontsize=8), app._get_plot_palette())
 
 
 def add_chapter_dividers(fig, start, palette):
@@ -209,6 +305,7 @@ class StatisticsReport:
         self.figures = [figure, *extra_figures]
         self.canvases = []
         self.chapters = []
+        self._figure_text = {}
         sidebar = ttk.Frame(self.window, padding=10)
         sidebar.pack(side="left", fill="y")
         ttk.Label(sidebar, text="Contents", font=app.ui_font).pack(anchor="w", pady=(0, 10))
@@ -249,6 +346,25 @@ class StatisticsReport:
                 target.bind("<Button-5>", lambda e: self.scroll.yview_scroll(3, "units"))
         self.scroll.bind("<MouseWheel>", self.wheel)
         self.window.protocol("WM_DELETE_WINDOW", self.close)
+
+    def translate_figures(self, language):
+        from matplotlib.text import Text
+        for canvas in self.canvases:
+            changed = False
+            for label in canvas.figure.findobj(match=Text):
+                current = label.get_text()
+                if not current:
+                    continue
+                original = self._figure_text.get(id(label))
+                if original is None or current not in (original, translate(original, "de")):
+                    original = current
+                    self._figure_text[id(label)] = original
+                translated = translate(original, language)
+                if translated != current:
+                    label.set_text(translated)
+                    changed = True
+            if changed:
+                canvas.draw()
 
     def jump(self, widget, ax=None, chapter_y=None):
         self.window.update_idletasks()

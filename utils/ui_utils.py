@@ -9,6 +9,8 @@ are stored in a statistics file and can be visualized.
 
 from __future__ import annotations
 
+from .i18n import Localizer, effective_language
+
 import random
 import queue
 import threading
@@ -32,7 +34,8 @@ from .keyboard_layouts import LAYOUTS, DEFAULT_LAYOUT, layout_characters, drill_
 
 import tkinter as tk
 import tkinter.font as tkfont
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from .i18n import messagebox
 
 from .backend import (
     calculate_end_error_percentage,
@@ -213,6 +216,11 @@ class TypingTrainerApp(PlotMixin):
         self.text_entries = texts
         self.texts = [entry["text"] for entry in texts]
         self.settings = load_settings()
+        self._typing_library_width = self.settings.get("typing_library_width")
+        self._typing_sash_ready = False
+        self.app_language_var = tk.StringVar(master, value=self.settings.get("app_language", "system"))
+        self.localizer = Localizer(master)
+        self._localization_job = None
         self.keyboard_layout_var = tk.StringVar(master, value=self.settings.get("keyboard_layout", DEFAULT_LAYOUT))
         self.custom_characters = self.settings.get("custom_characters", LAYOUTS[DEFAULT_LAYOUT])
         self.coverage_threshold = self.settings.get("coverage_threshold", 10)
@@ -335,6 +343,8 @@ class TypingTrainerApp(PlotMixin):
         self.sudden_death_mode_combobox: ttk.Combobox | None = None
 
         self._build_gui()
+        self._apply_language()
+        self.master.bind_all("<Map>", self._schedule_language_refresh, add="+")
         self.master.protocol("WM_DELETE_WINDOW", self.close)
         self.master.bind("<Configure>", self._on_window_resize, add="+")
         self._theme_job = self.master.after(2000, self._poll_system_theme)
@@ -416,8 +426,19 @@ class TypingTrainerApp(PlotMixin):
         typing_content.grid(row=1, column=0, sticky="nsew")
         typing_content.columnconfigure(1, weight=1)
         typing_content.rowconfigure(0, weight=1)
-        library = ttk.Frame(typing_content, padding=(0, 0, 10, 0))
-        library.grid(row=0, column=0, sticky="nsew")
+        panes = ttk.Panedwindow(typing_content, orient="horizontal")
+        self.typing_panes = panes
+        panes.grid(row=0, column=0, columnspan=2, sticky="nsew")
+        typing_content.columnconfigure(0, weight=1)
+        library = ttk.Frame(panes, padding=(0, 0, 10, 0))
+        panes.add(library, weight=0)
+        practice_area = ttk.Frame(panes)
+        practice_area.columnconfigure(0, weight=1)
+        practice_area.rowconfigure(0, weight=1)
+        panes.add(practice_area, weight=1)
+        panes.bind("<Configure>", self._restore_typing_sash, add="+")
+        panes.bind("<ButtonRelease-1>", self._save_typing_sash, add="+")
+        panes.bind("<KeyRelease>", self._save_typing_sash, add="+")
         library.columnconfigure(0, weight=1)
         library.rowconfigure(1, weight=1)
         ttk.Label(library, text="Available texts").grid(row=0, column=0, sticky="w", pady=(0, 6))
@@ -440,7 +461,7 @@ class TypingTrainerApp(PlotMixin):
             values=("English", "German"), state="readonly", font=self.ui_font, width=18)
         self.generation_language_picker.pack(fill="x")
         self.generation_language_picker.bind("<<ComboboxSelected>>", self.change_generation_language)
-        self._build_practice_input(typing_content, "typing", column=1)
+        self._build_practice_input(practice_area, "typing")
 
         drill_controls = ttk.Frame(helper)
         drill_controls.grid(row=0, column=0, sticky="ew", pady=(0, 8))
@@ -487,8 +508,15 @@ class TypingTrainerApp(PlotMixin):
         page.bind("<Configure>", lambda event: self.settings_canvas.configure(scrollregion=self.settings_canvas.bbox("all")))
         self.settings_canvas.bind("<Configure>", lambda event: self.settings_canvas.itemconfigure(content, width=event.width))
         page.columnconfigure(0, weight=1)
+        language_group = ttk.LabelFrame(page, text="App language", padding=14)
+        language_group.grid(row=0, column=0, sticky="ew", pady=(0, 14))
+        language_choices = ttk.Frame(language_group)
+        language_choices.pack(anchor="w")
+        for label, value in (("System language", "system"), ("Deutsch", "de"), ("English", "en")):
+            ttk.Radiobutton(language_choices, text=label, value=value, variable=self.app_language_var,
+                            style="Practice.TRadiobutton", command=self.change_app_language).pack(side="left", padx=(0, 6))
         theme = ttk.LabelFrame(page, text="Theme", padding=14)
-        theme.grid(row=0, column=0, sticky="ew", pady=(0, 14))
+        theme.grid(row=1, column=0, sticky="ew", pady=(0, 14))
         ttk.Label(theme, text="System follows your desktop appearance. Light and Dark override it.",
                   wraplength=750).pack(anchor="w", pady=(0, 10))
         choices = ttk.Frame(theme)
@@ -499,9 +527,9 @@ class TypingTrainerApp(PlotMixin):
         self.practice_font_size_var = tk.StringVar(self.master)
         self.ui_font_size_var = tk.StringVar(self.master)
         for row, title, explanation, variable, smaller, reset, bigger in (
-                (1, "Practice text size", "Size of practice passages and the text-manager editor.",
+                (2, "Practice text size", "Size of practice passages and the text-manager editor.",
                  self.practice_font_size_var, self.decrease_font_size, self.reset_font_size, self.increase_font_size),
-                (2, "UI text size", "Size of labels, buttons, tabs, pickers and text names.",
+                (3, "UI text size", "Size of labels, buttons, tabs, pickers and text names.",
                  self.ui_font_size_var, lambda: self.change_ui_font_size(-1), self.reset_ui_font_size,
                  lambda: self.change_ui_font_size(1))):
             group = ttk.LabelFrame(page, text=title, padding=14)
@@ -513,7 +541,7 @@ class TypingTrainerApp(PlotMixin):
             for label, command in (("Smaller", smaller), ("Reset", reset), ("Larger", bigger)):
                 ttk.Button(controls, text=label, command=command).pack(side="left", padx=(0, 6))
         keyboard = ttk.LabelFrame(page, text="Keyboard layout", padding=14)
-        keyboard.grid(row=3, column=0, sticky="ew", pady=(0, 14))
+        keyboard.grid(row=4, column=0, sticky="ew", pady=(0, 14))
         ttk.Label(keyboard, text="Determines coverage characters and the Letters / Characters / Numbers drill sets. "
                   "Preset drills exclude characters needing composition or uncommon modifier combinations. "
                   "Text languages do not filter coverage.", wraplength=750).pack(anchor="w", pady=(0, 10))
@@ -531,7 +559,7 @@ class TypingTrainerApp(PlotMixin):
         ttk.Label(keyboard, textvariable=self.layout_status, wraplength=750).pack(anchor="w", pady=(8, 0))
         self.layout_status.set(f"{len(self.get_layout_characters())} distinct characters in the selected layout.")
         ttk.Label(page, text="Changes are applied and saved automatically, except custom character edits.", wraplength=750).grid(
-            row=4, column=0, sticky="w")
+            row=5, column=0, sticky="w")
         self._update_settings_labels()
         def scroll_settings(event):
             if self.settings_canvas.yview() == (0.0, 1.0):
@@ -771,6 +799,25 @@ class TypingTrainerApp(PlotMixin):
             self._refresh_mode_description(update_status=True)
         if self.app_tabs.select() == str(self.text_management_page) and self.text_manager is None:
             self.text_manager = TextManager(self, parent=self.text_management_page)
+        if self.app_tabs.select() == str(self.text_management_page) and self.text_manager is not None:
+            loaded = self._loaded_typing_index
+            manager = self.text_manager
+            if not manager.selection_pending and loaded is not None and loaded in manager.source_indices:
+                index = manager.source_indices.index(loaded)
+                if manager.index != index:
+                    manager.commit_editor()
+                    manager.show_entry(index)
+            elif (not manager.selection_pending and loaded is None and not self._generated_text
+                  and manager.index is not None):
+                manager.selection_pending = True
+        if self.app_tabs.select() == str(self.practice_page) and self.text_manager is not None:
+            manager = self.text_manager
+            if manager.selection_pending and manager.index is not None:
+                saved_index = manager.source_indices[manager.index]
+                if saved_index is not None and 0 <= saved_index < len(self.texts):
+                    manager.selection_pending = False
+                    if saved_index != self._loaded_typing_index or self._generated_text:
+                        self._load_text_from_index(saved_index)
 
     def _on_analysis_tab(self, event=None):
         if self.statistics_tabs.select() == str(self.analysis_page):
@@ -940,8 +987,10 @@ class TypingTrainerApp(PlotMixin):
     def refresh_text_list(self) -> None:
         self.texts = [entry["text"] for entry in self.text_entries]
         self.text_listbox.delete(0, tk.END)
+        german_abbreviation = "Deu" if effective_language(self.app_language_var.get()) == "de" else "Ger"
         for index, entry in enumerate(self.text_entries, 1):
-            self.text_listbox.insert(tk.END, f"{index:02d}  {entry['name']}")
+            language = {"English": "Eng", "German": german_abbreviation}.get(entry.get("language"), "---")
+            self.text_listbox.insert(tk.END, f"{index:02d}  {entry['name']} [{language}]")
         index = self._loaded_typing_index
         if index is not None and 0 <= index < len(self.text_entries):
             self.text_listbox.selection_set(index)
@@ -998,17 +1047,57 @@ class TypingTrainerApp(PlotMixin):
                     self._apply_theme()
         self._theme_job = self.master.after(1000, self._poll_system_theme)
 
+    def _restore_typing_sash(self, event=None):
+        if self._typing_sash_ready or self.typing_panes.winfo_width() <= 1:
+            return
+        if self._typing_library_width is not None:
+            self.typing_panes.sashpos(0, self._typing_library_width)
+        self._typing_sash_ready = True
+        if self._typing_library_width is None:
+            self._typing_library_width = self.typing_panes.sashpos(0)
+
+    def _save_typing_sash(self, event=None):
+        if self._typing_sash_ready and self.typing_panes.winfo_ismapped():
+            self._typing_library_width = self.typing_panes.sashpos(0)
+            self._save_preferences()
+
     def _on_window_resize(self, event) -> None:
         if event.widget is self.master:
             if self._settings_job is not None:
                 self.master.after_cancel(self._settings_job)
             self._settings_job = self.master.after(400, self._save_preferences)
 
+    def _schedule_language_refresh(self, event=None):
+        if self._localization_job is None:
+            self._localization_job = self.master.after_idle(self._apply_language)
+
+    def _apply_language(self):
+        if self._localization_job is not None:
+            self.master.after_cancel(self._localization_job)
+            self._localization_job = None
+        language = effective_language(self.app_language_var.get())
+        self.localizer.apply(language)
+        report = getattr(self, "_statistics_report", None)
+        if report is not None and report.window.winfo_exists():
+            report.translate_figures(language)
+
+    def change_app_language(self):
+        if self.text_manager is not None:
+            self.text_manager.commit_editor()
+            self.text_manager.refresh_list()
+        self.refresh_text_list()
+        self._apply_language()
+        self.analysis_view.refresh(save=False)
+        self._apply_language()
+        self._save_preferences()
+
     def _save_preferences(self) -> None:
         if self._settings_job is not None:
             self.master.after_cancel(self._settings_job)
         self._settings_job = None
-        save_settings({"theme": self.theme_var.get().lower(),
+        save_settings({"app_language": self.app_language_var.get(),
+                       "typing_library_width": self._typing_library_width,
+                       "theme": self.theme_var.get().lower(),
                        "font_size": self.current_font_size,
                        "ui_font_size": self.ui_font_size,
                        "keyboard_layout": self.keyboard_layout_var.get(),
@@ -1028,7 +1117,7 @@ class TypingTrainerApp(PlotMixin):
         except OSError as error:
             messagebox.showerror("Settings", f"Could not save settings: {error}", parent=self.master)
             return
-        for job in (self._theme_job, self._settings_job, self._title_bar_refresh_job, self.update_job_id, self._generation_job):
+        for job in (self._theme_job, self._settings_job, self._title_bar_refresh_job, self.update_job_id, self._generation_job, self._localization_job):
             if job is not None:
                 self.master.after_cancel(job)
         report = getattr(self, "_statistics_report", None)
@@ -1623,6 +1712,8 @@ class TypingTrainerApp(PlotMixin):
 
         self._generation_revision += 1
         self._generated_text = False
+        if self.text_manager is not None:
+            self.text_manager.selection_pending = False
         self.app_tabs.select(self.practice_page)
         self._choose_practice("typing")
         self._loaded_typing_index = index

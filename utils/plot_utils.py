@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, List
 
 import tkinter as tk
-from tkinter import messagebox
+from .i18n import messagebox
 
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
@@ -16,7 +16,7 @@ import matplotlib.ticker as mticker
 from matplotlib.widgets import Button
 from matplotlib.figure import Figure
 
-from .statistics_report import StatisticsReport, context_figures
+from .statistics_report import StatisticsReport, context_figures, mark_latest_main_figure
 import numpy as np
 
 from .backend import parse_training_flag
@@ -141,6 +141,8 @@ class PlotMixin:
         return axes
 
     def _show_statistics_report(self, fig, paths, speed_label):
+        if paths:
+            mark_latest_main_figure(fig, paths[0], self)
         report = getattr(self, "_statistics_report", None)
         if report is not None and report.window.winfo_exists():
             report.close()
@@ -148,6 +150,7 @@ class PlotMixin:
             self, fig, context_figures(self, paths, speed_label),
             f"{speed_label} statistics · {self.stats_mode_var.get() if paths else 'All practice modes'}"
         )
+        self._apply_language()
 
     def _get_plot_palette(self) -> dict[str, Any]:
         """

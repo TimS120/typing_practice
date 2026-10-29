@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import messagebox
+from utils.i18n import effective_language, messagebox, set_message_language
 
-from utils.io_utils import DataError, TEXT_FILE_NAME, get__file_path, load_or_create_texts
+from utils.io_utils import DataError, TEXT_FILE_NAME, get__file_path, load_or_create_texts, load_settings
 from utils.ui_utils import TypingTrainerApp
 
 
 def main() -> None:
+    set_message_language(effective_language(load_settings().get("app_language", "system")))
     root = tk.Tk()
     root.withdraw()
     try:
