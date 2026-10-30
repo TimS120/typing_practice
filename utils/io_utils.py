@@ -222,6 +222,9 @@ def load_settings() -> dict:
     if not isinstance(settings, dict):
         return {}
     result = {}
+    for key in ("show_target_cursor", "show_info_box"):
+        if type(settings.get(key)) is bool:
+            result[key] = settings[key]
     if settings.get("app_language") in ("system", "de", "en"):
         result["app_language"] = settings["app_language"]
     if settings.get("theme") in ("system", "light", "dark"):

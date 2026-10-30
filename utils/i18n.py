@@ -51,6 +51,8 @@ TRANSLATIONS = {
     "Typing Trainer": "Tipptrainer", "Typing": "Tippen", "Typing text": "Text tippen",
     "Text management": "Textverwaltung", "Statistics": "Statistik", "Settings": "Einstellungen",
     "Helper modes": "Übungsmodi", "Mode": "Modus", "Training run": "Trainingslauf",
+    "Show cursor": "Cursor anzeigen", "Show info": "Info anzeigen",
+    "Whitespace preview: · space   ⇥ tab   ↵ newline   ⟦…⟧ other invisible characters. Red: unavailable on selected layout (approximate).": "Leerzeichenvorschau: · Leerzeichen   ⇥ Tab   ↵ Zeilenumbruch   ⟦…⟧ weitere unsichtbare Zeichen. Rot: im gewählten Layout nicht verfügbar (Näherung).",
     "Available texts": "Verfügbare Texte", "Load random": "Zufälligen Text laden",
     "Generate text": "Text generieren", "Generated text language": "Sprache des generierten Textes",
     "Text to type": "Text zum Abtippen", "Character to type": "Einzugebendes Zeichen",

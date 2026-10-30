@@ -10,6 +10,26 @@ LAYOUTS = {
 }
 DEFAULT_LAYOUT = "German QWERTZ"
 
+
+def keyboard_can_type(char, layout, custom=""):
+    """Approximate standard layouts, including their common dead-key compositions.
+
+    Custom is an explicit repertoire, not a detected physical keyboard. OS
+    variants, input methods and remappings can differ from these presets.
+    """
+    if layout == "Custom":
+        return char in custom
+    if layout not in LAYOUTS:
+        return False
+    direct = LAYOUTS[layout].replace("ẞ", "") if layout == "German QWERTZ" else LAYOUTS[layout]
+    if char in direct:
+        return True
+    if layout == "German QWERTZ":
+        decomposed = unicodedata.normalize("NFD", char)
+        return (len(decomposed) == 2 and decomposed[0] in string.ascii_letters
+                and decomposed[1] in "\u0300\u0301\u0302")
+    return False
+
 # Preset drills use ordinary keys, Shift or AltGr, without composition,
 # dead-key sequences, lock-state tricks or Shift+AltGr combinations. Keep
 # coverage repertoires separate: saved texts may still contain these symbols.

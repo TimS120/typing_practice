@@ -5,7 +5,7 @@ from tkinter import ttk
 from .i18n import messagebox, translate, effective_language
 import unicodedata
 
-from .keyboard_layouts import character_coverage, character_label
+from .keyboard_layouts import character_coverage, character_label, keyboard_can_type
 from .table_sort import indicate_sort
 
 from .io_utils import TEXT_FILE_NAME, TEXT_LANGUAGES, get__file_path, save_texts
@@ -102,7 +102,7 @@ class TextManager:
         ttk.Label(editor, text="Edit text (wraps automatically; Enter adds a real newline)", wraplength=430).grid(row=3, column=0, sticky="w")
         self.body = self.make_text(editor, 4, editable=True)
         self.body.bind("<<Modified>>", self.body_changed)
-        ttk.Label(editor, text="Whitespace preview: · space   ⇥ tab   ↵ newline   ⟦…⟧ other invisible characters", wraplength=430).grid(row=5, column=0, sticky="w", pady=(10, 4))
+        ttk.Label(editor, text="Whitespace preview: · space   ⇥ tab   ↵ newline   ⟦…⟧ other invisible characters. Red: unavailable on selected layout (approximate).", wraplength=430).grid(row=5, column=0, sticky="w", pady=(10, 4))
         self.preview = self.make_text(editor, 6, editable=False)
         self.count_var = tk.StringVar(self.window)
         ttk.Label(editor, textvariable=self.count_var, wraplength=430).grid(row=7, column=0, sticky="w", pady=4)
@@ -223,6 +223,7 @@ class TextManager:
             widget.configure(bg=theme["input_background"], fg=theme["text"],
                              insertbackground=theme["text"], selectbackground=theme["select_background"],
                              selectforeground=theme["select_foreground"], highlightbackground=theme["border"])
+        self.preview.tag_configure("unsupported", background=theme["error_background"], foreground=theme["error_foreground"])
         self.listbox.configure(bg=theme["surface"], fg=theme["text"],
                                selectbackground=theme["select_background"], selectforeground=theme["select_foreground"])
         if not self.embedded:
@@ -276,7 +277,10 @@ class TextManager:
         content = self.body.get("1.0", "end-1c")
         self.preview.configure(state="normal")
         self.preview.delete("1.0", tk.END)
-        self.preview.insert("1.0", visible_whitespace(content))
+        layout = self.app.keyboard_layout_var.get()
+        for char in content:
+            tags = () if keyboard_can_type(char, layout, self.app.custom_characters) else ("unsupported",)
+            self.preview.insert("end", visible_whitespace(char), tags)
         self.preview.configure(state="disabled")
         character_count = len(content)
         difference = character_count - SUGGESTED_CHARACTER_GOAL

@@ -216,6 +216,8 @@ class TypingTrainerApp(PlotMixin):
         self.text_entries = texts
         self.texts = [entry["text"] for entry in texts]
         self.settings = load_settings()
+        self.show_target_cursor_var = tk.BooleanVar(master, value=self.settings.get("show_target_cursor", True))
+        self.show_info_box_var = tk.BooleanVar(master, value=self.settings.get("show_info_box", True))
         self._typing_library_width = self.settings.get("typing_library_width")
         self._typing_sash_ready = False
         self.app_language_var = tk.StringVar(master, value=self.settings.get("app_language", "system"))
@@ -400,9 +402,16 @@ class TypingTrainerApp(PlotMixin):
         self.training_toggle = ttk.Checkbutton(controls, text="Training run", variable=self.training_run_var,
                                               command=self._refresh_mode_description)
         self.training_toggle.pack(side="left", padx=(18, 0))
+        ttk.Checkbutton(controls, text="Show cursor", variable=self.show_target_cursor_var,
+                        command=self._change_display_preferences).pack(side="left", padx=(12, 0))
+        ttk.Checkbutton(controls, text="Show info", variable=self.show_info_box_var,
+                        command=self._change_display_preferences).pack(side="right")
 
         information = ttk.Frame(practice, style="Info.TFrame", padding=(10, 8))
+        self.information_frame = information
         information.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        if not self.show_info_box_var.get():
+            information.grid_remove()
         information.columnconfigure(1, weight=1)
         ttk.Label(information, text="ⓘ", style="Info.TLabel").grid(row=0, column=0, sticky="n", padx=(0, 8))
         self.description_label = ttk.Label(information, textvariable=self.description_var,
@@ -648,6 +657,7 @@ class TypingTrainerApp(PlotMixin):
         self._save_preferences()
         if self.text_manager is not None:
             self.text_manager.refresh_coverage()
+            self.text_manager.update_preview()
 
     def apply_custom_characters(self):
         characters = self.custom_characters_editor.get("1.0", "end-1c")
@@ -703,6 +713,8 @@ class TypingTrainerApp(PlotMixin):
         typed.bind("<<PasteSelection>>", self._analysis_bulk_edit, add="+")
         if key == "typing":
             typed.bind("<<Modified>>", self._on_typing_input_changed)
+            for event in ("<KeyRelease>", "<ButtonRelease-1>", "<FocusIn>"):
+                typed.bind(event, lambda event: self.master.after_idle(self._update_blind_target_indicator), add="+")
         self.display_text_widgets[key] = target
         self.input_text_widgets[key] = typed
 
@@ -1096,6 +1108,8 @@ class TypingTrainerApp(PlotMixin):
             self.master.after_cancel(self._settings_job)
         self._settings_job = None
         save_settings({"app_language": self.app_language_var.get(),
+                       "show_target_cursor": self.show_target_cursor_var.get(),
+                       "show_info_box": self.show_info_box_var.get(),
                        "typing_library_width": self._typing_library_width,
                        "theme": self.theme_var.get().lower(),
                        "font_size": self.current_font_size,
@@ -1196,6 +1210,7 @@ class TypingTrainerApp(PlotMixin):
         Hide or show the input text contents depending on blind mode.
         """
         theme = DARK_THEME if self.dark_mode_enabled else LIGHT_THEME
+        self.input_text.configure(background=theme["blind_highlight"] if self.finished else theme["input_background"])
         if self.is_blind_mode_active():
             if self.blind_reveal_active:
                 self.input_text.configure(foreground=theme["input_foreground"])
@@ -1204,9 +1219,19 @@ class TypingTrainerApp(PlotMixin):
                     "blind_mask_foreground",
                     theme["input_background"]
                 )
+                if self.finished:
+                    mask_color = theme["blind_highlight"]
                 self.input_text.configure(foreground=mask_color)
         else:
             self.input_text.configure(foreground=theme["input_foreground"])
+
+    def _change_display_preferences(self):
+        if self.show_info_box_var.get():
+            self.information_frame.grid()
+        else:
+            self.information_frame.grid_remove()
+        self._update_blind_target_indicator()
+        self._save_preferences()
 
     def _update_blind_target_indicator(self, typed_length: int | None = None) -> None:
         """
@@ -1215,16 +1240,19 @@ class TypingTrainerApp(PlotMixin):
         self.display_text.configure(state="normal")
         self.display_text.tag_remove(BLIND_CURSOR_TAG, "1.0", tk.END)
         if (
-            not self.is_blind_mode_active()
+            not self.show_target_cursor_var.get()
             or self.is_letter_mode
             or self.is_special_mode
             or self.is_number_mode
             or not self.target_text
+            or self.finished
         ):
             self.display_text.configure(state="disabled")
             return
-        if typed_length is None:
-            typed_length = len(self._read_typing_input()[0])
+        raw_prefix = self.input_text.get("1.0", "insert")
+        raw = self.input_text.get("1.0", "end-1c")
+        _, offsets = normalize_wrapped_input(self.target_text, raw, self._soft_wrap_boundaries)
+        typed_length = sum(offset < len(raw_prefix) for offset in offsets)
         if typed_length >= len(self.target_text):
             self.display_text.configure(state="disabled")
             return
@@ -1287,6 +1315,8 @@ class TypingTrainerApp(PlotMixin):
         self._render_typed_text_with_errors(typed_text, target_sequence)
         self.finished = True
         self.input_text.configure(state="disabled")
+        self._update_input_visibility()
+        self._update_blind_target_indicator()
 
     def _apply_theme(self) -> None:
         """
@@ -3194,6 +3224,7 @@ class TypingTrainerApp(PlotMixin):
         if not widget.edit_modified():
             return
         widget.edit_modified(False)
+        self._update_blind_target_indicator()
         if (widget is not self.input_text or self._active_tab_key != "typing"
                 or self.is_letter_mode or self.is_special_mode or self.is_number_mode
                 or not self.target_text or self.finished):
@@ -3233,8 +3264,7 @@ class TypingTrainerApp(PlotMixin):
 
         typed_text, raw_offsets = self._read_typing_input()
         self._analysis_observe(typed_text)
-        if self.is_blind_mode_active():
-            self._update_blind_target_indicator(len(typed_text))
+        self._update_blind_target_indicator(len(typed_text))
 
         # First update cumulative error counter based on the change.
         self._update_error_counter(self.previous_text, typed_text)
@@ -3349,6 +3379,8 @@ class TypingTrainerApp(PlotMixin):
         self.sudden_death_failure_triggered = True
         self.finished = True
         self.input_text.configure(state="disabled")
+        self._update_input_visibility()
+        self._update_blind_target_indicator()
 
         if self.update_job_id is not None:
             self.master.after_cancel(self.update_job_id)
@@ -3473,6 +3505,8 @@ class TypingTrainerApp(PlotMixin):
 
         self.finished = True
         self.input_text.configure(state="disabled")
+        self._update_input_visibility()
+        self._update_blind_target_indicator()
 
         if self.update_job_id is not None:
             self.master.after_cancel(self.update_job_id)

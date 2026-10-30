@@ -167,6 +167,15 @@ class StorageTests(TemporaryData, unittest.TestCase):
         self.assertIn("U+00A0", visible_whitespace("\u00a0"))
         self.assertIn("U+200B", visible_whitespace("\u200b"))
 
+    def test_keyboard_compatibility_uses_layout_and_dead_keys(self):
+        from utils.keyboard_layouts import keyboard_can_type
+        self.assertTrue(keyboard_can_type("é", "German QWERTZ"))
+        self.assertTrue(keyboard_can_type("@", "German QWERTZ"))
+        self.assertFalse(keyboard_can_type("é", "US QWERTY"))
+        self.assertFalse(keyboard_can_type("\u00a0", "German QWERTZ"))
+        self.assertTrue(keyboard_can_type("é", "Custom", "é"))
+        self.assertFalse(keyboard_can_type("a", "Custom", "é"))
+
 
 class SystemThemeTests(unittest.TestCase):
     @patch.object(system_theme.sys, "platform", "linux")
@@ -533,7 +542,48 @@ class GuiTests(TemporaryData, unittest.TestCase):
         self.assertEqual((self.root.winfo_width(), self.root.winfo_height()), (1100, 640))
         self.assertFalse(self.app.training_run_var.get())
         self.assertEqual(set(io_utils.load_settings()), {"app_language", "typing_library_width", "theme", "font_size", "ui_font_size", "window_size",
-                                                         "keyboard_layout", "custom_characters", "coverage_threshold", "generation_language", "analysis_history", "analysis_minimum"})
+                                                         "keyboard_layout", "custom_characters", "coverage_threshold", "generation_language", "analysis_history", "analysis_minimum", "show_target_cursor", "show_info_box"})
+
+    def test_display_preferences_cursor_and_preview(self):
+        self.app.target_text = "abc"
+        self.app.display_text.configure(state="normal")
+        self.app.display_text.insert("1.0", "abc")
+        self.app.display_text.configure(state="disabled")
+        self.app.input_text.insert("1.0", "ab")
+        self.app.input_text.mark_set("insert", "1.1")
+        self.app._update_blind_target_indicator()
+        self.assertEqual(tuple(map(str, self.app.display_text.tag_ranges("blind_cursor"))), ("1.1", "1.2"))
+        self.app.show_target_cursor_var.set(False)
+        self.app.show_info_box_var.set(False)
+        self.app._change_display_preferences()
+        self.assertFalse(self.app.display_text.tag_ranges("blind_cursor"))
+        self.assertFalse(self.app.information_frame.winfo_ismapped())
+        settings = io_utils.load_settings()
+        self.assertFalse(settings["show_target_cursor"])
+        self.assertFalse(settings["show_info_box"])
+        self.app.show_info_box_var.set(True)
+        self.app._change_display_preferences()
+        self.root.update()
+        self.assertTrue(self.app.information_frame.winfo_ismapped())
+        manager = self.app.text_manager
+        manager.add()
+        manager.body.insert("1.0", "a\u00a0é")
+        manager.update_preview()
+        self.assertEqual(len(manager.preview.tag_ranges("unsupported")), 2)
+        self.app.keyboard_layout_var.set("US QWERTY")
+        self.app.change_keyboard_layout()
+        self.assertEqual(len(manager.preview.tag_ranges("unsupported")), 2)
+        self.assertIn("é", manager.preview.get("unsupported.first", "unsupported.last"))
+        manager.commit_editor()
+
+    def test_finished_input_is_grey_and_reset_unlocks(self):
+        from utils.ui_utils import LIGHT_THEME
+        self.app._display_sequence_result("a", "a")
+        self.assertEqual(self.app.input_text.cget("state"), "disabled")
+        self.assertEqual(self.app.input_text.cget("background"), LIGHT_THEME["blind_highlight"])
+        self.app.reset_session()
+        self.assertEqual(self.app.input_text.cget("state"), "normal")
+        self.assertEqual(self.app.input_text.cget("background"), LIGHT_THEME["input_background"])
 
     def test_layout_separates_practice_manager_and_statistics(self):
         self.assertEqual([self.app.app_tabs.tab(tab, "text") for tab in self.app.app_tabs.tabs()],
