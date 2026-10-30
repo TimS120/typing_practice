@@ -384,6 +384,111 @@ class GuiTests(TemporaryData, unittest.TestCase):
         self.app.change_keyboard_layout()
         self.assertEqual(counts()["U+00E4"], 0)
 
+    def test_coverage_selected_text_counts_follow_selection_edits_and_sorting(self):
+        self.app.open_text_manager()
+        manager = self.app.text_manager
+        for name, body in (("First", "aaB\t\n"), ("Second", "BBBc")):
+            manager.add()
+            manager.name_var.set(name)
+            manager.language_var.set("English")
+            manager.body.insert("1.0", body)
+        self.assertTrue(manager.save())
+        manager.show_entry(0)
+        manager.open_coverage()
+
+        def rows():
+            return [manager.coverage_table.item(item, "values") for item in manager.coverage_table.get_children()]
+
+        def values(code):
+            return next(row for row in rows() if row[1] == code)
+
+        self.assertEqual(tuple(map(int, values("U+0061")[2:])), (2, 2))
+        self.assertEqual(tuple(map(int, values("U+0042")[2:])), (4, 1))
+        self.assertEqual(int(values("U+0009")[3]), 1)
+        manager.body.insert("end", "BBB")
+        self.root.update()
+        self.assertEqual(tuple(map(int, values("U+0042")[2:])), (4, 4))
+        self.assertIn("First", manager.coverage_status.get())
+        manager.show_entry(1)
+        self.assertEqual(tuple(map(int, values("U+0061")[2:])), (2, 0))
+        self.assertEqual(tuple(map(int, values("U+0042")[2:])), (4, 3))
+        self.assertIn("Second", manager.coverage_status.get())
+        manager.sort_coverage("selected")
+        self.assertEqual([int(row[3]) for row in rows()], sorted(int(row[3]) for row in rows()))
+        manager.sort_coverage("selected")
+        self.assertEqual([int(row[3]) for row in rows()], sorted((int(row[3]) for row in rows()), reverse=True))
+        manager.threshold_var.set("3")
+        manager.apply_threshold()
+        self.assertNotIn("U+0042", [row[1] for row in rows()])
+        manager.show_entry(None)
+        self.assertTrue(all(row[3] == "—" for row in rows()))
+
+    def test_text_list_indicators_follow_saved_coverage_drafts_and_theme(self):
+        from utils.ui_utils import LIGHT_THEME, DARK_THEME
+        self.app.open_text_manager()
+        manager = self.app.text_manager
+        self.app.keyboard_layout_var.set("Custom")
+        self.app.custom_characters = "ab"
+        self.app.coverage_threshold = 5
+        self.app.text_entries = [
+            {"name": "Common", "text": "aaaaaa", "language": "English"},
+            {"name": "Other common", "text": "aaaaaa", "language": "English"},
+            {"name": "Useful", "text": "b", "language": "English"},
+            {"name": "Unsupported", "text": "b🙂", "language": "English"},
+        ]
+        manager.entries = copy.deepcopy(self.app.text_entries)
+        manager.source_indices = list(range(4))
+        manager.show_entry(0)
+        self.root.update()
+        def color(index):
+            return manager.listbox.itemcget(index, "foreground")
+        self.assertEqual(color(0), LIGHT_THEME["muted_text"])
+        self.assertEqual(color(1), LIGHT_THEME["muted_text"])
+        self.assertEqual(color(2), LIGHT_THEME["text"])
+        self.assertEqual(color(3), "#a31d2c")
+        manager.show_entry(2)
+        manager.body.delete("1.0", "end")
+        manager.body.insert("1.0", "aaa")
+        self.root.update()
+        self.assertEqual(color(2), LIGHT_THEME["muted_text"])
+        manager.body.insert("end", "🙂")
+        self.root.update()
+        self.assertEqual(color(2), "#a31d2c")
+        self.app.dark_mode_enabled = True
+        manager.apply_theme(DARK_THEME)
+        self.assertEqual(color(0), DARK_THEME["muted_text"])
+        self.assertEqual(color(2), "#ff9494")
+        manager.open_coverage()
+        manager.threshold_var.set("10")
+        manager.apply_threshold()
+        self.assertEqual(color(0), DARK_THEME["text"])
+        self.app.keyboard_layout_var.set("US QWERTY")
+        self.app.change_keyboard_layout()
+        self.assertEqual(color(2), "#ff9494")
+        manager.commit_editor()
+
+    def test_removable_text_colors_recalculate_after_each_deletion(self):
+        from utils.ui_utils import LIGHT_THEME
+        self.app.open_text_manager()
+        manager = self.app.text_manager
+        self.app.keyboard_layout_var.set("Custom")
+        self.app.custom_characters = "ab"
+        self.app.coverage_threshold = 5
+        manager.entries = [
+            {"name": "First", "text": "aaaaa", "language": "English"},
+            {"name": "Second", "text": "aaaaa", "language": "English"},
+            {"name": "Rare", "text": "b", "language": "English"},
+        ]
+        manager.source_indices = [None, None, None]
+        manager.show_entry(0)
+        self.assertEqual(manager.listbox.itemcget(0, "foreground"), LIGHT_THEME["muted_text"])
+        self.assertEqual(manager.listbox.itemcget(1, "foreground"), LIGHT_THEME["muted_text"])
+        self.assertEqual(manager.listbox.itemcget(2, "foreground"), LIGHT_THEME["text"])
+        with patch("tkinter.messagebox.askyesno", return_value=True):
+            manager.delete()
+        self.assertEqual(manager.listbox.itemcget(0, "foreground"), LIGHT_THEME["text"])
+        self.assertEqual(manager.listbox.itemcget(1, "foreground"), LIGHT_THEME["text"])
+
     def test_click_loads_and_completed_input_is_immutable_until_reset(self):
         self.app.text_entries = [{"name": "One", "text": "abc", "language": "English"},
                                  {"name": "Two", "text": "xyz", "language": "German"}]
@@ -706,6 +811,32 @@ class GuiTests(TemporaryData, unittest.TestCase):
         self.assertTrue(manager.save())
         self.assertIn("Draft passage", self.app.text_listbox.get(0))
 
+    def test_text_manager_selection_preserves_list_scroll_position(self):
+        self.app.open_text_manager()
+        manager = self.app.text_manager
+        manager.entries = [{"name": f"Passage {i}", "text": "Example", "language": "English"}
+                           for i in range(100)]
+        manager.source_indices = [None] * len(manager.entries)
+        manager.show_entry(0)
+        self.root.update()
+        manager.listbox.yview_moveto(0.6)
+        self.root.update()
+        top = manager.listbox.nearest(0)
+        selected = top + 2
+        manager.listbox.selection_clear(0, "end")
+        manager.listbox.selection_set(selected)
+        manager.select()
+        self.root.update()
+        self.assertEqual(manager.index, selected)
+        self.assertEqual(manager.listbox.nearest(0), top)
+        manager.name_var.set("Renamed passage")
+        self.root.update()
+        self.assertEqual(manager.listbox.nearest(0), top)
+        manager.add()
+        self.root.update()
+        self.assertEqual(manager.index, 100)
+        self.assertGreaterEqual(manager.listbox.yview()[1], 0.99)
+
     def test_statistics_mode_does_not_change_practice(self):
         self.app.start_number_mode()
         self.app.app_tabs.select(self.app.statistics_page)
@@ -837,6 +968,32 @@ class GuiTests(TemporaryData, unittest.TestCase):
         self.root.deiconify()
         self.root.update()
         self.assertEqual(self.app.typing_panes.sashpos(0), expected)
+
+    def test_text_manager_width_is_saved_and_restored_independently(self):
+        self.app.open_text_manager()
+        self.root.update()
+        panes = self.app.text_manager.panes
+        original = panes.sashpos(0)
+        editor_width = self.app.text_manager.body.winfo_width()
+        panes.event_generate("<ButtonPress-1>", x=original, y=20)
+        panes.event_generate("<B1-Motion>", x=original + 80, y=20)
+        panes.event_generate("<ButtonRelease-1>", x=original + 80, y=20)
+        self.root.update()
+        expected = panes.sashpos(0)
+        self.assertGreater(expected, original)
+        self.assertLess(self.app.text_manager.body.winfo_width(), editor_width)
+        self.assertEqual(io_utils.load_settings()["text_manager_library_width"], expected)
+        typing_width = self.app._typing_library_width
+        self.app.close()
+        import tkinter as tk
+        from utils.ui_utils import TypingTrainerApp
+        self.root = tk.Tk()
+        self.app = TypingTrainerApp(self.root, [])
+        self.root.update()
+        self.app.open_text_manager()
+        self.root.update()
+        self.assertEqual(self.app.text_manager.panes.sashpos(0), expected)
+        self.assertEqual(self.app._typing_library_width, typing_width)
 
     def test_language_setting_is_first_and_uses_theme_radio_style(self):
         from tkinter import ttk

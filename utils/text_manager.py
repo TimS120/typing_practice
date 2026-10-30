@@ -1,5 +1,6 @@
 """Manage an ordered text library while preserving the exact editable content."""
 import copy
+from collections import Counter
 import tkinter as tk
 from tkinter import ttk
 from .i18n import messagebox, translate, effective_language
@@ -53,11 +54,17 @@ class TextManager:
             self.window.minsize(700, 450)
             self.window.transient(app.master)
             self.window.protocol("WM_DELETE_WINDOW", self.close)
-        self.window.columnconfigure(1, weight=1)
+        self.window.columnconfigure(0, weight=1)
         self.window.rowconfigure(0, weight=1)
 
-        sidebar = ttk.Frame(self.window, padding=10)
-        sidebar.grid(row=0, column=0, sticky="nsew")
+        self.panes = ttk.Panedwindow(self.window, orient="horizontal")
+        self.panes.grid(row=0, column=0, columnspan=2, sticky="nsew")
+        self._sash_ready = False
+        self.panes.bind("<Configure>", self._restore_sash, add="+")
+        self.panes.bind("<ButtonRelease-1>", self._save_sash, add="+")
+        self.panes.bind("<KeyRelease>", self._save_sash, add="+")
+        sidebar = ttk.Frame(self.panes, padding=10)
+        self.panes.add(sidebar, weight=0)
         sidebar.rowconfigure(1, weight=1)
         sidebar.columnconfigure(0, weight=1)
         ttk.Label(sidebar, text="Texts (drag to reorder)").grid(row=0, column=0, sticky="w")
@@ -79,9 +86,11 @@ class TextManager:
 
         ttk.Button(sidebar, text="Character coverage", command=self.open_coverage).grid(
             row=3, column=0, sticky="ew", pady=(10, 0))
+        ttk.Label(sidebar, text="Red: unavailable characters. Grey: removable without reducing coverage up to the threshold.",
+                  wraplength=260).grid(row=4, column=0, sticky="w", pady=(8, 0))
 
-        editor = ttk.Frame(self.window, padding=10)
-        editor.grid(row=0, column=1, sticky="nsew")
+        editor = ttk.Frame(self.panes, padding=10)
+        self.panes.add(editor, weight=1)
         editor.columnconfigure(0, weight=1)
         editor.rowconfigure(4, weight=2)
         editor.rowconfigure(6, weight=1)
@@ -120,6 +129,20 @@ class TextManager:
         from .ui_utils import DARK_THEME, LIGHT_THEME
         self.apply_theme(DARK_THEME if app.dark_mode_enabled else LIGHT_THEME)
 
+    def _restore_sash(self, event=None):
+        if self._sash_ready or self.panes.winfo_width() <= 1:
+            return
+        if self.app._text_manager_library_width is not None:
+            self.panes.sashpos(0, self.app._text_manager_library_width)
+        self._sash_ready = True
+        if self.app._text_manager_library_width is None:
+            self.app._text_manager_library_width = self.panes.sashpos(0)
+
+    def _save_sash(self, event=None):
+        if self._sash_ready and self.panes.winfo_ismapped():
+            self.app._text_manager_library_width = self.panes.sashpos(0)
+            self.app._save_preferences()
+
     def entry_label(self, index):
         entry = self.entries[index]
         language = entry.get("language", "").strip()
@@ -136,8 +159,8 @@ class TextManager:
             return
         self.coverage_window = tk.Toplevel(self.app.master)
         self.coverage_window.title("Character coverage — saved texts")
-        self.coverage_window.geometry("620x550")
-        self.coverage_window.minsize(520, 350)
+        self.coverage_window.geometry("720x550")
+        self.coverage_window.minsize(600, 350)
         self.coverage_window.transient(self.app.master)
         page = ttk.Frame(self.coverage_window, padding=12)
         page.pack(fill="both", expand=True)
@@ -154,8 +177,8 @@ class TextManager:
         ttk.Button(controls, text="Refresh", command=self.refresh_coverage).pack(side="left", padx=8)
         self.coverage_status = tk.StringVar(page)
         ttk.Label(page, textvariable=self.coverage_status, wraplength=570).grid(row=2, column=0, sticky="w")
-        self.coverage_table = ttk.Treeview(page, columns=("character", "code", "count"), show="headings", style="Coverage.Treeview")
-        for column, label, width in (("character", "Character", 180), ("code", "Unicode", 100), ("count", "Count", 90)):
+        self.coverage_table = ttk.Treeview(page, columns=("character", "code", "count", "selected"), show="headings", style="Coverage.Treeview")
+        for column, label, width in (("character", "Character", 180), ("code", "Unicode", 100), ("count", "Count", 90), ("selected", "Selected text", 120)):
             self.coverage_table.heading(column, text=label, command=lambda c=column: self.sort_coverage(c))
             self.coverage_table.column(column, width=width)
         self.coverage_table.grid(row=3, column=0, sticky="nsew", pady=(8, 0))
@@ -177,6 +200,7 @@ class TextManager:
             return
         self.app.coverage_threshold = value
         self.app._save_preferences()
+        self.refresh_list_colors()
         self.refresh_coverage()
 
     def sort_coverage(self, column):
@@ -189,18 +213,23 @@ class TextManager:
             return
         characters = self.app.get_layout_characters()
         rows = character_coverage(self.app.text_entries, characters, self.app.coverage_threshold)
+        selected_counts = Counter(self.body.get("1.0", "end-1c")) if self.index is not None else None
         column, reverse = self.coverage_sort
         indicate_sort(self.coverage_table, column, reverse)
         if column != "count" or reverse:
             rows.sort(key=lambda row: (row[1], ord(row[0])) if column == "count"
+                      else (selected_counts[row[0]] if selected_counts is not None else 0, ord(row[0])) if column == "selected"
                       else ord(row[0]) if column == "code" else character_label(row[0]), reverse=reverse)
         self.coverage_table.delete(*self.coverage_table.get_children())
         for char, count in rows:
-            self.coverage_table.insert("", "end", values=(character_label(char), f"U+{ord(char):04X}", count))
+            self.coverage_table.insert("", "end", values=(character_label(char), f"U+{ord(char):04X}", count,
+                selected_counts[char] if selected_counts is not None else "—"))
         self.coverage_info.set(f"Layout: {self.app.keyboard_layout_var.get()} · {len(self.app.text_entries)} saved texts. "
                                "Counts combine all languages; uppercase, lowercase and whitespace are separate.")
+        selected_name = self.name_var.get() or translate("(unnamed)", effective_language(self.app.app_language_var.get()))
+        selected_info = f"Selected text: {selected_name} (includes unsaved edits)." if self.index is not None else "No text selected."
         self.coverage_status.set(f"{len(rows)} of {len(characters)} characters occur fewer than "
-                                 f"{self.app.coverage_threshold} times. Unsaved edits are excluded.")
+                                 f"{self.app.coverage_threshold} times in saved texts. {selected_info}")
 
     def make_text(self, parent, row, editable):
         frame = ttk.Frame(parent)
@@ -226,6 +255,7 @@ class TextManager:
         self.preview.tag_configure("unsupported", background=theme["error_background"], foreground=theme["error_foreground"])
         self.listbox.configure(bg=theme["surface"], fg=theme["text"],
                                selectbackground=theme["select_background"], selectforeground=theme["select_foreground"])
+        self.refresh_list_colors()
         if not self.embedded:
             self.app._set_native_title_bar_theme(self.window, self.app.dark_mode_enabled, theme)
         self.apply_coverage_theme(theme)
@@ -241,12 +271,35 @@ class TextManager:
                                         "language": "" if self.language_var.get() == "-" else self.language_var.get()}
 
     def refresh_list(self):
+        scroll_position = self.listbox.yview()[0]
         self.listbox.delete(0, tk.END)
         for i, entry in enumerate(self.entries, 1):
             self.listbox.insert(tk.END, self.entry_label(i - 1))
+        self.refresh_list_colors()
+        self.listbox.yview_moveto(scroll_position)
         if self.index is not None:
             self.listbox.selection_set(self.index)
             self.listbox.see(self.index)
+
+    def refresh_list_colors(self):
+        """Check each deletion against capped coverage of the current drafts."""
+        layout = self.app.keyboard_layout_var.get()
+        characters = set(self.app.get_layout_characters())
+        counts = Counter(char for entry in self.entries for char in entry["text"] if char in characters)
+        threshold = self.app.coverage_threshold
+        from .ui_utils import DARK_THEME, LIGHT_THEME
+        theme = DARK_THEME if self.app.dark_mode_enabled else LIGHT_THEME
+        error = "#ff9494" if self.app.dark_mode_enabled else "#a31d2c"
+        for index, entry in enumerate(self.entries):
+            content = entry["text"]
+            if any(not keyboard_can_type(char, layout, self.app.custom_characters) for char in content):
+                color = error
+            elif all(counts[char] - count >= min(counts[char], threshold)
+                     for char, count in Counter(content).items() if char in characters):
+                color = theme["muted_text"]
+            else:
+                color = theme["text"]
+            self.listbox.itemconfigure(index, foreground=color, selectforeground=color)
 
     def show_entry(self, index):
         self.loading = True
@@ -272,6 +325,7 @@ class TextManager:
         self.loading = False
         self.refresh_list()
         self.update_preview()
+        self.refresh_coverage()
 
     def update_preview(self):
         content = self.body.get("1.0", "end-1c")
@@ -301,10 +355,14 @@ class TextManager:
         if not self.loading:
             self.commit_editor()
             if self.index is not None:
+                scroll_position = self.listbox.yview()[0]
                 self.listbox.delete(self.index)
                 self.listbox.insert(self.index, self.entry_label(self.index))
                 self.listbox.selection_set(self.index)
+                self.listbox.yview_moveto(scroll_position)
+                self.refresh_list_colors()
             self.status_var.set("Unsaved changes")
+            self.refresh_coverage()
 
     def body_changed(self, event=None):
         if self.body.edit_modified():
@@ -312,7 +370,9 @@ class TextManager:
             if not self.loading:
                 self.commit_editor()
                 self.update_preview()
+                self.refresh_list_colors()
                 self.status_var.set("Unsaved changes")
+                self.refresh_coverage()
 
     def select(self, event=None):
         selection = self.listbox.curselection()
@@ -391,6 +451,7 @@ class TextManager:
         self.saved_entries = copy.deepcopy(self.entries)
         self.source_indices = list(range(len(self.entries)))
         self.status_var.set("Changes saved")
+        self.refresh_list_colors()
         self.refresh_coverage()
         return True
 

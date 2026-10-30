@@ -219,6 +219,7 @@ class TypingTrainerApp(PlotMixin):
         self.show_target_cursor_var = tk.BooleanVar(master, value=self.settings.get("show_target_cursor", True))
         self.show_info_box_var = tk.BooleanVar(master, value=self.settings.get("show_info_box", True))
         self._typing_library_width = self.settings.get("typing_library_width")
+        self._text_manager_library_width = self.settings.get("text_manager_library_width")
         self._typing_sash_ready = False
         self.app_language_var = tk.StringVar(master, value=self.settings.get("app_language", "system"))
         self.localizer = Localizer(master)
@@ -658,6 +659,7 @@ class TypingTrainerApp(PlotMixin):
         if self.text_manager is not None:
             self.text_manager.refresh_coverage()
             self.text_manager.update_preview()
+            self.text_manager.refresh_list_colors()
 
     def apply_custom_characters(self):
         characters = self.custom_characters_editor.get("1.0", "end-1c")
@@ -1111,6 +1113,7 @@ class TypingTrainerApp(PlotMixin):
                        "show_target_cursor": self.show_target_cursor_var.get(),
                        "show_info_box": self.show_info_box_var.get(),
                        "typing_library_width": self._typing_library_width,
+                       "text_manager_library_width": self._text_manager_library_width,
                        "theme": self.theme_var.get().lower(),
                        "font_size": self.current_font_size,
                        "ui_font_size": self.ui_font_size,

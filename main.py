@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import tkinter as tk
+from pathlib import Path
 from utils.i18n import effective_language, messagebox, set_message_language
 
 from utils.io_utils import DataError, TEXT_FILE_NAME, get__file_path, load_or_create_texts, load_settings
@@ -10,8 +11,10 @@ from utils.ui_utils import TypingTrainerApp
 
 def main() -> None:
     set_message_language(effective_language(load_settings().get("app_language", "system")))
-    root = tk.Tk()
+    root = tk.Tk(className="Typingpractice")
     root.withdraw()
+    icon = tk.PhotoImage(master=root, file=Path(__file__).resolve().parent / "assets" / "app_icon_transparent.png")
+    root.iconphoto(True, icon)
     try:
         texts = load_or_create_texts(get__file_path(TEXT_FILE_NAME))
         TypingTrainerApp(root, texts)

@@ -229,9 +229,10 @@ def load_settings() -> dict:
         result["app_language"] = settings["app_language"]
     if settings.get("theme") in ("system", "light", "dark"):
         result["theme"] = settings["theme"]
-    library_width = settings.get("typing_library_width")
-    if type(library_width) is int and 1 <= library_width <= 10000:
-        result["typing_library_width"] = library_width
+    for key in ("typing_library_width", "text_manager_library_width"):
+        library_width = settings.get(key)
+        if type(library_width) is int and 1 <= library_width <= 10000:
+            result[key] = library_width
     size = settings.get("font_size")
     if type(size) is int and 6 <= size <= 48:
         result["font_size"] = size
